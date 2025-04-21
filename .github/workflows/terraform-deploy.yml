@@ -205,18 +205,35 @@ jobs:
         OUTPUTS=$(terraform output -json)
         echo "outputs=$OUTPUTS" >> $GITHUB_OUTPUT
     
-    - name: Post Results to Application
-      if: ${{ env.APP_WEBHOOK_URL != '' }}
+    - name: Post Success Results to Application
+      if: success() && env.APP_WEBHOOK_URL != ''
       run: |
-        curl -X POST -H "Content-Type: application/json" -d '{
-          "secret": "${{ secrets.WEBHOOK_SECRET }}",
-          "deployment_id": "${{ steps.deployment_id.outputs.id }}",
-          "status": "completed",
-          "resource_type": "${{ github.event.inputs.resource_type }}",
-          "name": "${{ github.event.inputs.name }}",
-          "environment": "${{ github.event.inputs.environment }}",
-          "region": "${{ github.event.inputs.region }}",
-          "outputs": ${{ steps.terraform_output.outputs.outputs }},
-          "requested_by": "${{ github.actor }}",
-          "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
-        }' ${{ env.APP_WEBHOOK_URL }}
+          curl -X POST -H "Content-Type: application/json" -d '{
+            "secret": "${{ secrets.WEBHOOK_SECRET }}",
+            "deployment_id": "${{ steps.deployment_id.outputs.id }}",
+            "status": "completed",
+            "resource_type": "${{ github.event.inputs.resource_type }}",
+            "name": "${{ github.event.inputs.name }}",
+            "environment": "${{ github.event.inputs.environment }}",
+            "region": "${{ github.event.inputs.region }}",
+            "outputs": ${{ steps.terraform_output.outputs.outputs }},
+            "requested_by": "${{ github.actor }}",
+            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+          }' ${{ env.APP_WEBHOOK_URL }}
+      
+    - name: Post Failure Results to Application
+      if: failure() && env.APP_WEBHOOK_URL != ''
+      run: |
+          curl -X POST -H "Content-Type: application/json" -d '{
+            "secret": "${{ secrets.WEBHOOK_SECRET }}",
+            "deployment_id": "${{ steps.deployment_id.outputs.id }}",
+            "status": "failed",
+            "resource_type": "${{ github.event.inputs.resource_type }}",
+            "name": "${{ github.event.inputs.name }}",
+            "environment": "${{ github.event.inputs.environment }}",
+            "region": "${{ github.event.inputs.region }}",
+            "outputs": {},
+            "error_message": "Deployment failed in GitHub Actions workflow",
+            "requested_by": "${{ github.actor }}",
+            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+          }' ${{ env.APP_WEBHOOK_URL }}

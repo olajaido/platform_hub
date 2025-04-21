@@ -64,3 +64,16 @@ def get_deployment(deployment_id):
         return None
     
     return deployments[0]
+def update_stalled_deployments():
+    """Find and update deployments that have been pending for too long"""
+    # Get deployments that have been pending for more than 10 minutes
+    response = supabase.rpc(
+        "update_stalled_deployments",
+        {
+            "timeout_minutes": 10,
+            "new_status": "failed",
+            "error_message": "Deployment timed out - no response from workflow"
+        }
+    ).execute()
+    
+    return response.data

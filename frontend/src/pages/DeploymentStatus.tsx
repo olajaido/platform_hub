@@ -160,10 +160,28 @@ const DeploymentStatus = () => {
         refetch();
       }
     }, 5000);
+
+    let timeoutId: NodeJS.Timeout | undefined;
+    if (deploymentData?.status === 'pending') {
+      const createdTime = new Date(deploymentData.created_at).getTime();
+      const currentTime = new Date().getTime();
+      
+      // If deployment has been pending for more than 5 minutes, consider it failed
+      const fiveMinutesInMs = 5 * 60 * 1000;
+      if (currentTime - createdTime > fiveMinutesInMs) {
+        timeoutId = setTimeout(() => {
+          setLogs(prevLogs => [...prevLogs, "⚠️ WARNING: Deployment has been pending for over 5 minutes. It may have failed or stalled. Check GitHub Actions for details."]);
+        }, 10000);
+      }
+    }
     
-    return () => clearInterval(intervalId);
+    // Update the return to clear both timers
+    return () => {
+      clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [logsData, deploymentData, refetch]);
-  
+    
   const isLoading = statusLoading || logsLoading;
   const error = statusError || logsError;
   
