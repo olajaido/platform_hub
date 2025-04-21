@@ -1,219 +1,5 @@
-// import React, { useState, useEffect } from 'react';
-// import { useParams } from 'react-router-dom';
-// import { 
-//   Container, 
-//   Paper, 
-//   Typography, 
-//   Box, 
-//   Chip, 
-//   Divider,
-//   CircularProgress
-// } from '@mui/material';
-// import { GridItem } from './../components/common/GridItem';
-// import Grid from '@mui/material/Grid';
-// import { 
-//   CheckCircle as CheckCircleIcon,
-//   Error as ErrorIcon,
-//   Pending as PendingIcon,
-//   AccessTime as AccessTimeIcon
-// } from '@mui/icons-material';
-// import { useQuery } from 'react-query';
-// import axios from 'axios';
-// import io from 'socket.io-client';
-
-// // Custom log display component
-// const LogConsole = ({ logs = [] }) => {
-//   return (
-//     <Box
-//       sx={{
-//         maxHeight: '400px',
-//         overflow: 'auto',
-//         p: 2,
-//         backgroundColor: '#000',
-//         color: '#fff',
-//         fontFamily: 'monospace',
-//         borderRadius: 1
-//       }}
-//     >
-//       {logs.length === 0 ? (
-//         <Typography variant="body2">Waiting for logs...</Typography>
-//       ) : (
-//         logs.map((log, index) => (
-//           <Typography key={index} variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-//             {log}
-//           </Typography>
-//         ))
-//       )}
-//     </Box>
-//   );
-// };
-
-// // Status chip component
-// const StatusChip = ({ status }: { status: string }) => {
-//   let icon = <PendingIcon />;
-//   let color: 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' = 'default';
-  
-//   switch (status) {
-//     case 'completed':
-//       icon = <CheckCircleIcon />;
-//       color = 'success';
-//       break;
-//     case 'failed':
-//       icon = <ErrorIcon />;
-//       color = 'error';
-//       break;
-//     case 'in_progress':
-//       icon = <AccessTimeIcon />;
-//       color = 'primary';
-//       break;
-//     default:
-//       icon = <PendingIcon />;
-//       color = 'default';
-//   }
-  
-//   return (
-//     <Chip 
-//       icon={icon} 
-//       label={status.replace('_', ' ').toUpperCase()} 
-//       color={color}
-//       sx={{ textTransform: 'capitalize' }}
-//     />
-//   );
-// };
-
-// // Main component
-// const DeploymentStatus = () => {
-//   const { deploymentId } = useParams();
-//   const [logs, setLogs] = useState([]);
-  
-//   // Fetch deployment status
-//   const { data: deploymentData, isLoading: statusLoading, error: statusError } = useQuery<any, Error>(
-//     ['deployment', deploymentId],
-//     async () => {
-//       const response = await axios.get(`/api/deployments/${deploymentId}/status`, {
-//         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-//       });
-//       return response.data;
-//     },
-//     { refetchInterval: 5000 } // Poll every 5 seconds
-//   );
-  
-//   // Fetch deployment logs
-//   const { data: logsData, isLoading: logsLoading, error: logsError } = useQuery(
-//     ['logs', deploymentId],
-//     async () => {
-//       const response = await axios.get(`/api/deployments/${deploymentId}/logs`, {
-//         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-//       });
-//       return response.data;
-//     },
-//     { refetchInterval: 3000 } // Poll every 3 seconds
-//   );
-  
-//   // Socket connection for real-time logs (would be implemented in production)
-//   useEffect(() => {
-//     // This would be a real WebSocket connection in production
-//     // const socket = io('http://localhost:8000');
-    
-//     // socket.on('connect', () => {
-//     //   socket.emit('subscribe', { deploymentId });
-//     // });
-    
-//     // socket.on('log', (newLog) => {
-//     //   setLogs(prevLogs => [...prevLogs, newLog]);
-//     // });
-    
-//     // return () => {
-//     //   socket.disconnect();
-//     // };
-    
-//     // For demo purposes, use the logs from the API
-//     if (logsData && logsData.logs) {
-//       setLogs(logsData.logs);
-//     }
-//   }, [logsData]);
-  
-//   const isLoading = statusLoading || logsLoading;
-//   const error = statusError || logsError;
-  
-//   if (error) {
-//     return (
-//       <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-//         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
-//           <Typography variant="h5" color="error" gutterBottom>
-//             Error loading deployment details
-//           </Typography>
-//           <Typography variant="body1">
-//           {(error as any).response?.data?.detail || (error as Error).message}
-//           </Typography>
-//         </Paper>
-//       </Container>
-//     );
-//   }
-  
-//   return (
-//     <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
-//       <Paper elevation={3} sx={{ p: 4 }}>
-//         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-//           <Typography variant="h4" component="h1">
-//             Deployment Status
-//           </Typography>
-          
-//           {isLoading ? (
-//             <CircularProgress size={24} />
-//           ) : (
-//             deploymentData && <StatusChip status={deploymentData.status} />
-//           )}
-//         </Box>
-        
-//         <Divider sx={{ mb: 3 }} />
-        
-//         {isLoading ? (
-//           <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-//             <CircularProgress />
-//           </Box>
-//         ) : (
-//           <>
-//             <Grid container spacing={3} sx={{ mb: 4 }}>
-//               <GridItem xs={12} md={6}>
-//                 <Typography variant="subtitle1">Deployment ID:</Typography>
-//                 <Typography variant="body1">{deploymentId}</Typography>
-//               </GridItem>
-              
-//               {deploymentData && deploymentData.created_at && (
-//                 <GridItem xs={12} md={6}>
-//                   <Typography variant="subtitle1">Created:</Typography>
-//                   <Typography variant="body1">
-//                     {new Date(deploymentData.created_at).toLocaleString()}
-//                   </Typography>
-//                 </GridItem>
-//               )}
-              
-//               {deploymentData && deploymentData.completed_at && (
-//                 <GridItem xs={12} md={6}>
-//                   <Typography variant="subtitle1">Completed:</Typography>
-//                   <Typography variant="body1">
-//                     {new Date(deploymentData.completed_at).toLocaleString()}
-//                   </Typography>
-//                 </GridItem>
-//               )}
-//             </Grid>
-            
-//             <Typography variant="h6" gutterBottom>
-//               Deployment Logs
-//             </Typography>
-            
-//             <LogConsole logs={logs} />
-//           </>
-//         )}
-//       </Paper>
-//     </Container>
-//   );
-// };
-
-// export default DeploymentStatus;
-
 import React, { useState, useEffect } from 'react';
+import apiClient from '../api';
 import { useParams } from 'react-router-dom';
 import { 
   Container, 
@@ -238,7 +24,6 @@ import {
   AccessTime as AccessTimeIcon
 } from '@mui/icons-material';
 import { useQuery } from 'react-query';
-import axios from 'axios';
 
 // Custom log display component
 const LogConsole = ({ logs = [] }: { logs?: string[] }) => {
@@ -336,7 +121,7 @@ const DeploymentStatus = () => {
   const { data: deploymentData, isLoading: statusLoading, error: statusError, refetch } = useQuery<any, Error>(
     ['deployment', deploymentId],
     async () => {
-      const response = await axios.get(`/api/deployments/${deploymentId}/status`, {
+      const response = await apiClient.get(`/api/deployments/${deploymentId}/status`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       return response.data;
@@ -356,12 +141,12 @@ const DeploymentStatus = () => {
   const { data: logsData, isLoading: logsLoading, error: logsError } = useQuery(
     ['logs', deploymentId],
     async () => {
-      const response = await axios.get(`/api/deployments/${deploymentId}/logs`, {
+      const response = await apiClient.get(`/api/deployments/${deploymentId}/logs`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       return response.data;
     },
-    { refetchInterval: 3000 } // Poll every 3 seconds
+    { refetchInterval: 3000 }
   );
   
   useEffect(() => {

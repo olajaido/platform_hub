@@ -1,55 +1,5 @@
-// import React, { createContext, useState, useContext, ReactNode } from 'react';
-
-// interface User {
-//   username: string;
-//   role: string;
-// }
-
-// interface AuthContextType {
-//   user: User | null;
-//   login: (username: string, password: string) => Promise<void>;
-//   logout: () => void;
-//   isAuthenticated: boolean;
-// }
-
-// const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-// export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
-//   const [user, setUser] = useState<User | null>(null);
-
-//   const login = async (username: string, password: string) => {
-//     // Mock login - replace with actual API call
-//     setUser({ username, role: 'developer' });
-//     localStorage.setItem('token', 'mock-jwt-token');
-//   };
-
-//   const logout = () => {
-//     setUser(null);
-//     localStorage.removeItem('token');
-//   };
-
-//   return (
-//     <AuthContext.Provider value={{ 
-//       user, 
-//       login, 
-//       logout,
-//       isAuthenticated: !!user 
-//     }}>
-//       {children}
-//     </AuthContext.Provider>
-//   );
-// };
-
-// export const useAuth = () => {
-//   const context = useContext(AuthContext);
-//   if (context === undefined) {
-//     throw new Error('useAuth must be used within an AuthProvider');
-//   }
-//   return context;
-// };
-
 import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import axios from 'axios';
+import apiClient from '../api';
 
 interface User {
   username: string;
@@ -77,8 +27,8 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          // Get user info from backend
-          const response = await axios.get('http://localhost:8000/api/me', {
+          // Get user info from backend using apiClient
+          const response = await apiClient.get('/api/me', {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           setUser(response.data);
@@ -102,8 +52,8 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       formData.append('username', username);
       formData.append('password', password);
       
-      // Login request
-      const response = await axios.post('http://localhost:8000/api/token', formData, {
+      // Login request using apiClient
+      const response = await apiClient.post('/api/token', formData, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }
@@ -113,8 +63,8 @@ export const AuthProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       const { access_token } = response.data;
       localStorage.setItem('token', access_token);
       
-      // Get user info
-      const userResponse = await axios.get('http://localhost:8000/api/me', {
+      // Get user info using apiClient
+      const userResponse = await apiClient.get('/api/me', {
         headers: { 'Authorization': `Bearer ${access_token}` }
       });
       
