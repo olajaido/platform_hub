@@ -125,66 +125,160 @@ jobs:
       run: |
         mkdir -p terraform-config
         
-        # Create main.tf based on resource type
+        # Create variables.tf to declare all variables
+        cat > terraform-config/variables.tf << EOF
+        variable "deployment_id" {
+          description = "Unique identifier for this deployment"
+          type        = string
+        }
+        
+        # Common variables
+        variable "region" {
+          description = "AWS region for the resources"
+          type        = string
+          default     = "${{ github.event.inputs.region }}"
+        }
+        
+        variable "environment" {
+          description = "Deployment environment (dev, staging, prod)"
+          type        = string
+          default     = "${{ github.event.inputs.environment }}"
+        }
+        
+        variable "name" {
+          description = "Resource name"
+          type        = string
+          default     = "${{ github.event.inputs.name }}"
+        }
+        
+        # EC2 specific variables
+        variable "instance_type" {
+          description = "EC2 instance type"
+          type        = string
+          default     = "${{ github.event.inputs.instance_type }}"
+        }
+        
+        variable "subnet_id" {
+          description = "Subnet ID for the EC2 instance"
+          type        = string
+          default     = "${{ github.event.inputs.subnet_id }}"
+        }
+        
+        variable "root_volume_size" {
+          description = "Size in GB for the root volume"
+          type        = number
+          default     = ${{ github.event.inputs.volume_size }}
+        }
+        
+        variable "assign_eip" {
+          description = "Whether to assign Elastic IP to the instance"
+          type        = bool
+          default     = ${{ github.event.inputs.assign_eip }}
+        }
+        
+        variable "security_group_ids" {
+          description = "List of security group IDs"
+          type        = list(string)
+          default     = ["${{ env.SECURITY_GROUP_ID }}"]
+        }
+        
+        # S3 specific variables
+        variable "bucket_name" {
+          description = "Name of the S3 bucket"
+          type        = string
+          default     = "${{ github.event.inputs.bucket_name }}"
+        }
+        
+        variable "versioning_enabled" {
+          description = "Whether to enable bucket versioning"
+          type        = bool
+          default     = ${{ github.event.inputs.versioning_enabled || 'false' }}
+        }
+        EOF
+        
+        # Create resource-specific main.tf
         if [[ "${{ github.event.inputs.resource_type }}" == "ec2_instance" ]]; then
           cat > terraform-config/main.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
         module "ec2_instance" {
           source = "../terraform/modules/ec2_instance"
           
-          name           = "${{ github.event.inputs.name }}"
-          environment    = "${{ github.event.inputs.environment }}"
-          region         = "${{ github.event.inputs.region }}"
-          instance_type  = "${{ github.event.inputs.instance_type }}"
-          subnet_id      = "${{ github.event.inputs.subnet_id }}"
-          security_group_ids = ["${{ env.SECURITY_GROUP_ID }}"]
-          root_volume_size = ${{ github.event.inputs.volume_size }}
-          assign_eip     = ${{ github.event.inputs.assign_eip }}
-          deployment_id  = "${{ steps.deployment_id.outputs.id }}"
+          name                = var.name
+          environment         = var.environment
+          region              = var.region
+          instance_type       = var.instance_type
+          subnet_id           = var.subnet_id
+          security_group_ids  = var.security_group_ids
+          root_volume_size    = var.root_volume_size
+          assign_eip          = var.assign_eip
+          deployment_id       = var.deployment_id
         }
-        
+        EOF
+          
+          # Create outputs.tf for EC2
+          cat > terraform-config/outputs.tf << EOF
         output "instance_id" {
           value = module.ec2_instance.instance_id
+          description = "The ID of the created EC2 instance"
         }
         
         output "public_ip" {
           value = module.ec2_instance.elastic_ip != null ? module.ec2_instance.elastic_ip : module.ec2_instance.instance_public_ip
+          description = "The public IP address of the instance"
         }
         
         output "ssh_command" {
           value = module.ec2_instance.ssh_command
+          description = "SSH command to connect to the instance"
         }
         EOF
+          
         elif [[ "${{ github.event.inputs.resource_type }}" == "s3_bucket" ]]; then
           cat > terraform-config/main.tf << EOF
-        module "s3_bucket" {
-          source = "../modules/s3_bucket"
-          
-          bucket_name      = "${{ github.event.inputs.bucket_name }}"
-          environment      = "${{ github.event.inputs.environment }}"
-          region           = "${{ github.event.inputs.region }}"
-          versioning_enabled = ${{ github.event.inputs.versioning_enabled }}
-          deployment_id    = "${{ steps.deployment_id.outputs.id }}"
+        provider "aws" {
+          region = var.region
         }
         
+        module "s3_bucket" {
+          source = "../terraform/modules/s3_bucket"
+          
+          bucket_name        = var.bucket_name
+          environment        = var.environment
+          region             = var.region
+          versioning_enabled = var.versioning_enabled
+          deployment_id      = var.deployment_id
+        }
+        EOF
+          
+          # Create outputs.tf for S3
+          cat > terraform-config/outputs.tf << EOF
         output "bucket_id" {
           value = module.s3_bucket.bucket_id
+          description = "The name of the bucket"
         }
         
         output "bucket_arn" {
           value = module.s3_bucket.bucket_arn
+          description = "The ARN of the bucket"
         }
         
         output "bucket_domain_name" {
           value = module.s3_bucket.bucket_domain_name
+          description = "The domain name of the bucket"
         }
         EOF
+        
         else
           echo "Unsupported resource type: ${{ github.event.inputs.resource_type }}"
           exit 1
         fi
         
         # Copy modules directory to workspace
-        mkdir -p terraform-config/modules && cp -r terraform/modules/* terraform-config/modules/
+        mkdir -p terraform-config/modules
+        cp -r terraform/modules/* terraform-config/modules/
     
     - name: Terraform Init
       working-directory: terraform-config
