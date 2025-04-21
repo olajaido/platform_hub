@@ -1,0 +1,30 @@
+# Terraform files
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+**/*.tfvars
+*.tfvars
+
+# Credentials
+*.pem
+*.key
+*.pub
+
+# Local files
+.terraformrc
+terraform.rc
+
+# Temporary files
+*~
+# vim swap files
+.swp
+.swo
+
+# Other files you might want to ignore
+.DS_Store
+Thumbs.db

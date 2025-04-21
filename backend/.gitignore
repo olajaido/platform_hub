@@ -1,0 +1,91 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+lib64/python*/site-packages/*egg
+lib/python*/site-packages/*egg
+pip-wheel-metadata/
+tmp/
+wheels/
+*.egg-info/
+.installed.cfg
+*.whl
+MANIFEST.in
+*.manifest
+
+# PyInstaller related
+build
+dist
+*.spec
+.pyinstaller
+
+# Jupyter Notebook related
+.ipynb_checkpoints
+
+# Environments
+.env
+env/
+venv/
+ENV/
+pyvenv.cfg
+.project
+.cache
+__pypackage__
+_wheels
+
+# Poetry related
+poetry.lock
+
+# mypy
+.mypy_cache/
+mypy.ini
+
+# Flake8
+.flake8
+
+# Ruff
+.ruff_cache/
+
+# Black
+.black_cache
+
+# Coverage data
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.tox
+
+# Sentry related
+.sentryclirc
+
+# mkdocs
+site/
+
+# Documentation builds
+docs/_build
+
+# Temp files and logs
+*.log
+*.tmp
+*.swp
+*.bak
+*.dump
+*.DS_Store
+Thumbs.db
+
+# OS or Editor specific files (adjust as needed)
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

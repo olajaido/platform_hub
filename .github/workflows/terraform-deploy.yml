@@ -1,0 +1,219 @@
+# .github/workflows/terraform-deploy.yml
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_type:
+        description: 'Type of resource to deploy'
+        required: true
+        type: choice
+        options:
+          - ec2_instance
+          - s3_bucket
+      
+      name:
+        description: 'Resource name'
+        required: true
+        type: string
+      
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      
+      region:
+        description: 'AWS region'
+        required: true
+        default: 'eu-west-2'
+        type: choice
+        options:
+          - eu-west-2
+          - us-east-1
+          - us-west-2
+          - eu-west-1
+      
+      # EC2 specific inputs
+      instance_type:
+        description: 'EC2 instance type (for EC2 only)'
+        required: false
+        default: 't2.micro'
+        type: string
+      
+      volume_size:
+        description: 'Root volume size in GB (for EC2 only)'
+        required: false
+        default: '20'
+        type: string
+      
+      assign_eip:
+        description: 'Assign Elastic IP to EC2 instance'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      
+      # Existing VPC inputs for EC2
+      subnet_id:
+        description: 'Subnet for EC2 instance'
+        required: false
+        default: 'subnet-07759e500cfdfb6b2'
+        type: choice
+        options:
+          - 'subnet-07759e500cfdfb6b2' # eu-west-2a
+          - 'subnet-0d95a35be6e1fb603' # eu-west-2b
+          - 'subnet-00e88d7e1a6b7c689' # eu-west-2c
+      
+      # S3 specific inputs
+      bucket_name:
+        description: 'S3 bucket name (for S3 only)'
+        required: false
+        type: string
+      
+      versioning_enabled:
+        description: 'Enable versioning for S3 bucket'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+    APP_WEBHOOK_URL: https://a1b2c3d4.ngrok.io/api/webhook/deployment
+    SECURITY_GROUP_ID: "sg-060323606252babd1"
+
+jobs:
+  terraform:
+    name: 'Terraform Deploy'
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        shell: bash
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+    
+    # Configure AWS credentials with role assumption
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: arn:aws:iam::436549840164:role/github_action_role
+        aws-region: ${{ github.event.inputs.region }}
+    
+    - name: Generate Deployment ID
+      id: deployment_id
+      run: echo "id=deploy-$(date +%s)" >> $GITHUB_OUTPUT
+    
+    - name: Generate Terraform Configuration
+      run: |
+        mkdir -p terraform-config
+        
+        # Create main.tf based on resource type
+        if [[ "${{ github.event.inputs.resource_type }}" == "ec2_instance" ]]; then
+          cat > terraform-config/main.tf << EOF
+        module "ec2_instance" {
+          source = "../modules/ec2_instance"
+          
+          name           = "${{ github.event.inputs.name }}"
+          environment    = "${{ github.event.inputs.environment }}"
+          region         = "${{ github.event.inputs.region }}"
+          instance_type  = "${{ github.event.inputs.instance_type }}"
+          subnet_id      = "${{ github.event.inputs.subnet_id }}"
+          security_group_ids = ["${{ env.SECURITY_GROUP_ID }}"]
+          root_volume_size = ${{ github.event.inputs.volume_size }}
+          assign_eip     = ${{ github.event.inputs.assign_eip }}
+          deployment_id  = "${{ steps.deployment_id.outputs.id }}"
+        }
+        
+        output "instance_id" {
+          value = module.ec2_instance.instance_id
+        }
+        
+        output "public_ip" {
+          value = module.ec2_instance.elastic_ip != null ? module.ec2_instance.elastic_ip : module.ec2_instance.instance_public_ip
+        }
+        
+        output "ssh_command" {
+          value = module.ec2_instance.ssh_command
+        }
+        EOF
+        elif [[ "${{ github.event.inputs.resource_type }}" == "s3_bucket" ]]; then
+          cat > terraform-config/main.tf << EOF
+        module "s3_bucket" {
+          source = "../modules/s3_bucket"
+          
+          bucket_name      = "${{ github.event.inputs.bucket_name }}"
+          environment      = "${{ github.event.inputs.environment }}"
+          region           = "${{ github.event.inputs.region }}"
+          versioning_enabled = ${{ github.event.inputs.versioning_enabled }}
+          deployment_id    = "${{ steps.deployment_id.outputs.id }}"
+        }
+        
+        output "bucket_id" {
+          value = module.s3_bucket.bucket_id
+        }
+        
+        output "bucket_arn" {
+          value = module.s3_bucket.bucket_arn
+        }
+        
+        output "bucket_domain_name" {
+          value = module.s3_bucket.bucket_domain_name
+        }
+        EOF
+        else
+          echo "Unsupported resource type: ${{ github.event.inputs.resource_type }}"
+          exit 1
+        fi
+        
+        # Copy modules directory to workspace
+        cp -r modules terraform-config/
+    
+    - name: Terraform Init
+      working-directory: terraform-config
+      run: terraform init
+    
+    - name: Terraform Plan
+      working-directory: terraform-config
+      run: terraform plan -var="deployment_id=${{ steps.deployment_id.outputs.id }}" -out=tfplan
+      
+    - name: Terraform Apply
+      working-directory: terraform-config
+      run: terraform apply -auto-approve tfplan
+    
+    - name: Capture Terraform Outputs
+      working-directory: terraform-config
+      id: terraform_output
+      run: |
+        OUTPUTS=$(terraform output -json)
+        echo "outputs=$OUTPUTS" >> $GITHUB_OUTPUT
+    
+    - name: Post Results to Application
+      if: ${{ env.APP_WEBHOOK_URL != '' }}
+      run: |
+        curl -X POST -H "Content-Type: application/json" -d '{
+          "secret": "${{ secrets.WEBHOOK_SECRET }}",
+          "deployment_id": "${{ steps.deployment_id.outputs.id }}",
+          "status": "completed",
+          "resource_type": "${{ github.event.inputs.resource_type }}",
+          "name": "${{ github.event.inputs.name }}",
+          "environment": "${{ github.event.inputs.environment }}",
+          "region": "${{ github.event.inputs.region }}",
+          "outputs": ${{ steps.terraform_output.outputs.outputs }},
+          "requested_by": "${{ github.actor }}",
+          "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+        }' ${{ env.APP_WEBHOOK_URL }}

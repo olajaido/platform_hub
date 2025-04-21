@@ -1,0 +1,24 @@
+# fastapi==0.104.1
+# uvicorn==0.23.2
+# python-jose==3.3.0
+# pydantic==2.4.2
+# python-multipart==0.0.6
+# python-terraform==0.10.1
+# pytest==7.4.3
+# httpx==0.25.0
+# passlib==1.7.4
+# bcrypt==4.0.1
+# python-dotenv==1.0.0
+
+# Update your requirements.txt with:
+fastapi==0.95.2
+uvicorn==0.22.0
+python-jose==3.3.0
+pydantic==1.10.8
+python-multipart==0.0.6
+python-terraform==0.10.1
+pytest==7.3.1
+httpx>=0.26.0,<0.29.0
+passlib[bcrypt]==1.7.4
+python-dotenv==1.0.0
+supabase>=2.15.0
