@@ -2,7 +2,7 @@
 
 A self-service platform for developers to provision and manage cloud infrastructure through a simple web interface, backed by Infrastructure as Code automation.
 
-![Platform Screenshot](docs/images/dashboard.png)
+![Platform Screenshot](https://github.com/olajaido/platform_hub/raw/main/docs/images/dashboard.png)
 
 ## Features
 
@@ -22,7 +22,7 @@ The platform consists of three main components:
 2. **Backend**: FastAPI service with JWT authentication
 3. **Infrastructure Pipeline**: GitHub Actions workflow that executes Terraform
 
-![Architecture Diagram](docs/images/architecture.png)
+![Architecture Diagram](https://github.com/olajaido/platform_hub/raw/main/docs/images/architecture.png)
 
 
 
