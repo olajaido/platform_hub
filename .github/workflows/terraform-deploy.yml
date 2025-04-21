@@ -129,7 +129,7 @@ jobs:
         if [[ "${{ github.event.inputs.resource_type }}" == "ec2_instance" ]]; then
           cat > terraform-config/main.tf << EOF
         module "ec2_instance" {
-          source = "../modules/ec2_instance"
+          source = "../terraform/modules/ec2_instance"
           
           name           = "${{ github.event.inputs.name }}"
           environment    = "${{ github.event.inputs.environment }}"
@@ -184,7 +184,7 @@ jobs:
         fi
         
         # Copy modules directory to workspace
-        cp -r modules terraform-config/
+        mkdir -p terraform-config/modules && cp -r terraform/modules/* terraform-config/modules/
     
     - name: Terraform Init
       working-directory: terraform-config
