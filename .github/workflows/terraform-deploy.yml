@@ -86,7 +86,7 @@ on:
           - 'false'
 
 env:
-    APP_WEBHOOK_URL: https://a1b2c3d4.ngrok.io/api/webhook/deployment
+    APP_WEBHOOK_URL: https://platform-hub.onrender.com/api/webhook/deployment
     SECURITY_GROUP_ID: "sg-060323606252babd1"
 
 jobs:
