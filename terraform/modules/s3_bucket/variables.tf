@@ -30,3 +30,8 @@ variable "versioning_enabled" {
   type        = bool
   default     = false
 }
+
+variable "deployment_id" {
+  description = "Unique identifier for this deployment"
+  type        = string
+}

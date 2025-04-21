@@ -71,3 +71,8 @@ variable "assign_eip" {
   type        = bool
   default     = false
 }
+
+variable "deployment_id" {
+  description = "Unique identifier for this deployment"
+  type        = string
+}
