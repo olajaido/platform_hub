@@ -24,6 +24,8 @@ The platform consists of three main components:
 
 ![Architecture Diagram](docs/images/architecture.png)
 
+
+
 ## Technology Stack
 
 ### Frontend
