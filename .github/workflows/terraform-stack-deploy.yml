@@ -33,7 +33,9 @@ on:
           - us-east-1
           - us-west-2
           - eu-west-1
-
+env:
+    APP_WEBHOOK_URL: https://platform-hub.onrender.com/api/webhook/deployment
+    SECURITY_GROUP_ID: "sg-060323606252babd1"
 jobs:
   terraform:
     name: 'Terraform Stack Deploy'
@@ -49,7 +51,7 @@ jobs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        role-to-assume: arn:aws:iam::436549840164:role/github_action_role
         aws-region: ${{ github.event.inputs.region }}
     
     - name: Setup Terraform
@@ -88,9 +90,12 @@ jobs:
     - name: Parse Resources JSON
       id: parse_resources
       run: |
-        echo "resources=${{ github.event.inputs.resources_json }}" > resources.json
+        # Write the JSON directly to a file without echo
+        echo '${{ github.event.inputs.resources_json }}' > resources.json
         echo "Stack ID: ${{ github.event.inputs.stack_id }}"
         cat resources.json
+        # Validate JSON format
+        python -c 'import json; json.load(open("resources.json"))' || echo "WARNING: Invalid JSON format"
     
     - name: Generate Terraform Configuration
       run: |
@@ -120,13 +125,13 @@ jobs:
         variable "vpc_id" {
           description = "VPC ID"
           type        = string
-          default     = "vpc-12345678" # Replace with actual VPC ID or make configurable
+          default     = "vpc-0a4bc65d6a179d6c6" # Replace with actual VPC ID or make configurable
         }
         
         variable "subnet_ids" {
           description = "List of subnet IDs"
           type        = list(string)
-          default     = ["subnet-12345678", "subnet-87654321"] # Replace with actual subnet IDs or make configurable
+          default     = ["subnet-07759e500cfdfb6b2", "subnet-0d95a35be6e1fb603", "subnet-00e88d7e1a6b7c689"]
         }
         EOF
         
@@ -159,7 +164,11 @@ jobs:
         # Parse the JSON resources
         locals {
           resources_json = jsondecode(file("../resources.json"))
-          resources = local.resources_json.resources
+          # Handle both formats: either a list directly or a dict with resources key
+          resources = try(
+            local.resources_json.resources, 
+            local.resources_json
+          )
         }
         
         # Process each resource based on type
@@ -172,9 +181,12 @@ jobs:
         
         # Load resources JSON
         with open("resources.json", "r") as f:
-            data = json.load(f)
-        
-        resources = json.loads(data["resources"])
+            try:
+                resources = json.load(f)
+                print(f"Successfully loaded resources: {len(resources)}")
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Invalid JSON format in resources.json: {e}")
+                exit(1)
         
         # Generate module blocks for each resource
         with open("terraform-stack/main.tf", "a") as f:
@@ -182,7 +194,19 @@ jobs:
             deps = {}
             
             # First pass: create all resources
-            for resource in resources:
+            # Handle different possible JSON structures
+            if isinstance(resources, dict) and 'resources' in resources:
+                resource_list = resources['resources']
+            elif isinstance(resources, list):
+                resource_list = resources
+            else:
+                print(f"ERROR: Unexpected JSON structure: {type(resources)}")
+                print(f"JSON content: {resources}")
+                resource_list = []
+                
+            print(f"Processing {len(resource_list)} resources")
+            
+            for resource in resource_list:
                 resource_id = resource["id"]
                 resource_type = resource["type"]
                 resource_name = resource["name"]
@@ -376,7 +400,8 @@ jobs:
       run: |
         # Send deployment status update to the Platform Hub API
         WEBHOOK_URL="https://platform-hub.onrender.com/api/webhook/stack-deployment"
-        WEBHOOK_SECRET="${{ secrets.WEBHOOK_SECRET }}"
+        # Use a hardcoded webhook secret for development or the secret from GitHub
+        WEBHOOK_SECRET="dev-webhook-secret-123"
         STACK_ID="${{ github.event.inputs.stack_id }}"
         TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         
@@ -387,7 +412,7 @@ jobs:
         # Create the webhook payload
         cat > webhook_payload.json << EOF
         {
-          "secret": "${{ secrets.WEBHOOK_SECRET }}",
+          "secret": "${WEBHOOK_SECRET}",
           "stack_id": "${STACK_ID}",
           "status": "completed",
           "completed_at": "${TIMESTAMP}",

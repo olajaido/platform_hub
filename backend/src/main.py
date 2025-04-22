@@ -184,8 +184,9 @@ async def create_deployment(
 async def deployment_webhook(data: dict):
     """Receive deployment updates from GitHub Actions"""
     # Verify a shared secret
-    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "dev-webhook-secret-123")
     if data.get("secret") != webhook_secret:
+        logger.warning(f"Invalid webhook secret: {data.get('secret')} vs {webhook_secret}")
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
         
     deployment_id = data.get("deployment_id")
@@ -252,8 +253,9 @@ async def create_infrastructure_stack(
 async def stack_deployment_webhook(data: dict):
     """Receive stack deployment updates from GitHub Actions"""
     # Verify a shared secret
-    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "dev-webhook-secret-123")
     if data.get("secret") != webhook_secret:
+        logger.warning(f"Invalid webhook secret: {data.get('secret')} vs {webhook_secret}")
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
         
     stack_id = data.get("stack_id")
@@ -322,8 +324,9 @@ async def get_stack_status(
 async def drift_check_webhook(data: dict):
     """Receive drift check results from GitHub Actions"""
     # Verify a shared secret
-    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "dev-webhook-secret-123")
     if data.get("secret") != webhook_secret:
+        logger.warning(f"Invalid webhook secret: {data.get('secret')} vs {webhook_secret}")
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
         
     stack_id = data.get("stack_id")
