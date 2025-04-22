@@ -263,7 +263,8 @@ async def stack_deployment_webhook(data: dict):
     update_data = {
         "status": data.get("status"),
         "outputs": data.get("outputs", {}),
-        "completed_at": data.get("completed_at") if data.get("status") in ["completed", "failed"] else None
+        "completed_at": data.get("completed_at") if data.get("status") in ["completed", "failed"] else None,
+        "state_version": data.get("state_version", 1)  # Track state file version
     }
     
     # Check if the stack deployment exists
@@ -315,6 +316,74 @@ async def get_stack_status(
         "completed_at": stack.get("completed_at"),
         "outputs": stack.get("outputs", {}),
         "resources": resources
+    }
+
+@app.post("/api/webhook/drift-check")
+async def drift_check_webhook(data: dict):
+    """Receive drift check results from GitHub Actions"""
+    # Verify a shared secret
+    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    if data.get("secret") != webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+        
+    stack_id = data.get("stack_id")
+    from src.supabase import update_stack_deployment, get_stack_deployment
+    
+    # Get the stack deployment
+    stack = get_stack_deployment(stack_id)
+    if not stack:
+        raise HTTPException(status_code=404, detail="Stack deployment not found")
+    
+    # Update the stack with drift information
+    update_data = {
+        "drift_detected": data.get("drift_detected", False),
+        "drift_message": data.get("message", ""),
+        "drift_summary": data.get("summary", ""),
+        "last_drift_check": data.get("checked_at")
+    }
+    
+    # Update the stack deployment
+    update_stack_deployment(stack_id, update_data)
+    
+    return {"status": "ok"}
+
+@app.post("/api/stacks/{stack_id}/check-drift")
+async def check_infrastructure_drift(
+    stack_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Check for infrastructure drift by comparing the current state with the desired state"""
+    # Check if user has permission
+    if current_user.role not in ["admin", "developer"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to check infrastructure drift"
+        )
+    
+    from src.supabase import get_stack_deployment
+    
+    # Get the stack deployment
+    stack = get_stack_deployment(stack_id)
+    if not stack:
+        raise HTTPException(status_code=404, detail="Stack deployment not found")
+    
+    # Get state file location
+    state_file = stack.get("state_file")
+    if not state_file:
+        raise HTTPException(status_code=400, detail="No state file information available for this stack")
+    
+    # Trigger a plan-only workflow to check for drift
+    from src.github_api import trigger_drift_detection
+    
+    result = await trigger_drift_detection({
+        "stack_id": stack_id,
+        "state_file": state_file
+    })
+    
+    return {
+        "stack_id": stack_id,
+        "drift_check_id": result.get("drift_check_id"),
+        "message": "Drift detection initiated"
     }
 
 if __name__ == "__main__":

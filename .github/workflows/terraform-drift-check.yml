@@ -1,0 +1,131 @@
+# .github/workflows/terraform-drift-check.yml
+name: Check Infrastructure Drift
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_id:
+        description: 'ID of the stack to check for drift'
+        required: true
+        type: string
+      
+      state_file_bucket:
+        description: 'S3 bucket containing the Terraform state file'
+        required: true
+        type: string
+      
+      state_file_key:
+        description: 'S3 key for the Terraform state file'
+        required: true
+        type: string
+      
+      state_file_region:
+        description: 'AWS region for the Terraform state file'
+        required: true
+        type: string
+
+jobs:
+  check_drift:
+    name: 'Check Infrastructure Drift'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ github.event.inputs.state_file_region }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.4.6
+    
+    - name: Create Terraform Configuration
+      run: |
+        mkdir -p drift-check
+        
+        # Create backend.tf to reference the existing state file
+        cat > drift-check/backend.tf << EOF
+        terraform {
+          backend "s3" {
+            bucket         = "${{ github.event.inputs.state_file_bucket }}"
+            key            = "${{ github.event.inputs.state_file_key }}"
+            region         = "${{ github.event.inputs.state_file_region }}"
+            encrypt        = true
+            dynamodb_table = "platform-hub-terraform-locks"
+          }
+        }
+        EOF
+        
+        # Create empty providers.tf to ensure Terraform can initialize
+        cat > drift-check/providers.tf << EOF
+        provider "aws" {
+          region = "${{ github.event.inputs.state_file_region }}"
+        }
+        EOF
+    
+    - name: Terraform Init
+      working-directory: drift-check
+      run: terraform init
+    
+    - name: Check for Drift
+      id: drift_check
+      working-directory: drift-check
+      run: |
+        # Run terraform plan to detect changes
+        terraform plan -detailed-exitcode -out=tfplan 2> plan_output.txt || echo "Exit code: $?"
+        
+        # Check the exit code
+        # 0 = No changes
+        # 1 = Error
+        # 2 = Changes present
+        if [ $? -eq 0 ]; then
+          echo "DRIFT_DETECTED=false" >> $GITHUB_ENV
+          echo "DRIFT_MESSAGE=No infrastructure drift detected" >> $GITHUB_ENV
+        elif [ $? -eq 2 ]; then
+          echo "DRIFT_DETECTED=true" >> $GITHUB_ENV
+          echo "DRIFT_MESSAGE=Infrastructure drift detected" >> $GITHUB_ENV
+          
+          # Get a summary of the changes
+          terraform show -no-color tfplan > plan_summary.txt
+          CHANGES=$(grep -A 3 "Plan:" plan_summary.txt || echo "Changes detected but couldn't summarize them")
+          echo "DRIFT_SUMMARY=$CHANGES" >> $GITHUB_ENV
+        else
+          echo "DRIFT_DETECTED=error" >> $GITHUB_ENV
+          echo "DRIFT_MESSAGE=Error checking for infrastructure drift" >> $GITHUB_ENV
+        fi
+    
+    - name: Send Drift Status to API
+      run: |
+        WEBHOOK_URL="https://platform-hub.onrender.com/api/webhook/drift-check"
+        WEBHOOK_SECRET="${{ secrets.WEBHOOK_SECRET }}"
+        STACK_ID="${{ github.event.inputs.stack_id }}"
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Create the webhook payload
+        cat > webhook_payload.json << EOF
+        {
+          "secret": "${{ secrets.WEBHOOK_SECRET }}",
+          "stack_id": "${STACK_ID}",
+          "drift_detected": "${DRIFT_DETECTED}",
+          "message": "${DRIFT_MESSAGE}",
+          "summary": "${DRIFT_SUMMARY:-'No summary available'}",
+          "checked_at": "${TIMESTAMP}"
+        }
+        EOF
+        
+        # Send the webhook request
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d @webhook_payload.json \
+          ${WEBHOOK_URL}
+        
+        echo "Drift check completed for stack: ${STACK_ID}"
+        echo "Result: ${DRIFT_MESSAGE}"

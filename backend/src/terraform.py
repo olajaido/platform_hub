@@ -142,6 +142,13 @@ async def execute_terraform_stack(resources: List[Any]) -> Dict[str, Any]:
         # Generate a unique stack ID
         stack_id = f"stack-{int(datetime.now().timestamp())}-{uuid.uuid4().hex[:8]}"
         
+        # Define state file location for tracking
+        state_file_location = {
+            "bucket": "platform-hub-terraform-state",
+            "key": f"stacks/{stack_id}/terraform.tfstate",
+            "region": resources[0].region if resources else "eu-west-2"
+        }
+        
         # Create a dependency graph of resources
         resource_map = {resource.id: resource for resource in resources}
         
@@ -198,7 +205,8 @@ async def execute_terraform_stack(resources: List[Any]) -> Dict[str, Any]:
             "id": stack_id,
             "resources": [r.dict() for r in resources],
             "status": "pending",
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
+            "state_file": state_file_location
         })
         
         return {

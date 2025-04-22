@@ -12,6 +12,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "yourusername/your-repo-name")
 WORKFLOW_ID = os.getenv("GITHUB_WORKFLOW_ID", "terraform-deploy.yml")
 STACK_WORKFLOW_ID = os.getenv("GITHUB_STACK_WORKFLOW_ID", "terraform-stack-deploy.yml")
+DRIFT_CHECK_WORKFLOW_ID = os.getenv("GITHUB_DRIFT_CHECK_WORKFLOW_ID", "terraform-drift-check.yml")
 
 async def trigger_infrastructure_deployment(
     resource_type: str,
@@ -165,3 +166,63 @@ async def trigger_stack_deployment(
         }
     else:
         raise Exception(f"Failed to trigger stack workflow: {response.status_code} - {response.text}")
+
+async def trigger_drift_detection(
+    drift_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Trigger the GitHub Actions workflow to check for infrastructure drift
+    
+    Args:
+        drift_config: Configuration for the drift detection
+            - stack_id: Unique identifier for the stack
+            - state_file: Information about the Terraform state file
+    
+    Returns:
+        Dict with drift check details
+    """
+    if not GITHUB_TOKEN:
+        raise ValueError("GITHUB_TOKEN environment variable is not set")
+    
+    # Extract state file information
+    state_file = drift_config.get("state_file", {})
+    
+    # Payload for GitHub API
+    payload = {
+        "ref": "main",  # Branch where the workflow is defined
+        "inputs": {
+            "stack_id": drift_config["stack_id"],
+            "state_file_bucket": state_file.get("bucket", ""),
+            "state_file_key": state_file.get("key", ""),
+            "state_file_region": state_file.get("region", "eu-west-2")
+        }
+    }
+    
+    # Headers for GitHub API
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # Trigger the workflow via GitHub API
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{DRIFT_CHECK_WORKFLOW_ID}/dispatches",
+            headers=headers,
+            json=payload
+        )
+    
+    if response.status_code == 204:
+        # Generate a unique ID for this drift check
+        drift_check_id = f"drift-{int(datetime.now().timestamp())}-{uuid.uuid4().hex[:8]}"
+        
+        # Return the drift check details
+        return {
+            "drift_check_id": drift_check_id,
+            "stack_id": drift_config["stack_id"],
+            "status": "pending",
+            "message": "Drift detection initiated"
+        }
+    else:
+        raise Exception(f"Failed to trigger drift check workflow: {response.status_code} - {response.text}")
