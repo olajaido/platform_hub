@@ -94,9 +94,9 @@ jobs:
     - name: Generate Deployment ID
       id: deployment_id
       run: |
-        TIMESTAMP=$(date +%s)
-        RANDOM_SUFFIX=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
-        echo "id=deploy-${TIMESTAMP}-${RANDOM_SUFFIX}" >> $GITHUB_OUTPUT
+          TIMESTAMP=$(date +%s)
+          RANDOM_SUFFIX=$(openssl rand -hex 4)
+          echo "id=deploy-${TIMESTAMP}-${RANDOM_SUFFIX}" >> $GITHUB_OUTPUT
     
     - name: Parse Configuration
       id: config
