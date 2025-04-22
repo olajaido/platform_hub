@@ -1,8 +1,8 @@
 import React from 'react';
-import ResourceRequestForm from '../components/ResourceRequestForm';
+import EnhancedResourceRequestForm from '../components/EnhancedResourceRequestForm';
 
 const ResourceRequest: React.FC = () => {
-  return <ResourceRequestForm />;
+  return <EnhancedResourceRequestForm />;
 };
 
 export default ResourceRequest;

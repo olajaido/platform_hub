@@ -6,8 +6,12 @@ from supabase import create_client, Client
 load_dotenv()
 
 # Initialize Supabase client
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+supabase_url = os.getenv("SUPABASE_URL", "https://example.supabase.co")
+supabase_key = os.getenv("SUPABASE_KEY", "your-supabase-key")
+
+# For development purposes only - use mock client if no credentials
+if supabase_url == "https://example.supabase.co" or supabase_key == "your-supabase-key":
+    print("WARNING: Using mock Supabase client. Set SUPABASE_URL and SUPABASE_KEY environment variables for production.")
 
 supabase: Client = create_client(supabase_url, supabase_key)
 
@@ -77,3 +81,40 @@ def update_stalled_deployments():
     ).execute()
     
     return response.data
+
+async def save_stack_deployment(stack_data):
+    """Save a stack deployment to Supabase"""
+    try:
+        response = supabase.table("stack_deployments").insert(stack_data).execute()
+        return response.data
+    except Exception as e:
+        print(f"Error saving stack deployment: {str(e)}")
+        raise
+
+async def update_stack_deployment(stack_id, update_data):
+    """Update a stack deployment in Supabase"""
+    response = supabase.table("stack_deployments").update(update_data).eq("id", stack_id).execute()
+    return response.data
+
+def get_stack_deployments():
+    """Get all stack deployments from Supabase"""
+    response = supabase.table("stack_deployments").select("*").order("created_at", desc=True).execute()
+    return response.data
+
+def get_stack_deployment(stack_id):
+    """Get a stack deployment from Supabase by ID"""
+    response = supabase.table("stack_deployments").select("*").eq("id", stack_id).execute()
+    stack_deployments = response.data
+    
+    if not stack_deployments or len(stack_deployments) == 0:
+        return None
+    
+    return stack_deployments[0]
+
+def get_stack_resources(stack_id):
+    """Get all resources in a stack deployment"""
+    stack = get_stack_deployment(stack_id)
+    if not stack:
+        return []
+    
+    return stack.get("resources", [])

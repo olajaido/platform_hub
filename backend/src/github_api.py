@@ -1,7 +1,8 @@
 # src/github_api.py
 import os
 import httpx
-from typing import Dict, Any
+import json
+from typing import Dict, Any, List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,6 +11,7 @@ load_dotenv()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "yourusername/your-repo-name")
 WORKFLOW_ID = os.getenv("GITHUB_WORKFLOW_ID", "terraform-deploy.yml")
+STACK_WORKFLOW_ID = os.getenv("GITHUB_STACK_WORKFLOW_ID", "terraform-stack-deploy.yml")
 
 async def trigger_infrastructure_deployment(
     resource_type: str,
@@ -109,3 +111,57 @@ async def trigger_infrastructure_deployment(
         }
     else:
         raise Exception(f"Failed to trigger workflow: {response.status_code} - {response.text}")
+
+async def trigger_stack_deployment(
+    stack_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Trigger the GitHub Actions workflow to deploy a stack of infrastructure resources
+    
+    Args:
+        stack_config: Configuration for the stack deployment
+            - stack_id: Unique identifier for the stack
+            - resources: List of resources with their configurations and dependencies
+    
+    Returns:
+        Dict with deployment details
+    """
+    if not GITHUB_TOKEN:
+        raise ValueError("GITHUB_TOKEN environment variable is not set")
+    
+    # Payload for GitHub API
+    payload = {
+        "ref": "main",  # Branch where the workflow is defined
+        "inputs": {
+            "stack_id": stack_config["stack_id"],
+            "resources_json": json.dumps(stack_config["resources"])
+        }
+    }
+    
+    # Headers for GitHub API
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # Trigger the workflow via GitHub API
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{STACK_WORKFLOW_ID}/dispatches",
+            headers=headers,
+            json=payload
+        )
+    
+    if response.status_code == 204:
+        # Stack ID is already generated in terraform.py
+        stack_id = stack_config["stack_id"]
+        
+        # Return the deployment details
+        return {
+            "deployment_id": stack_id,
+            "status": "pending",
+            "message": f"Stack deployment triggered successfully with {len(stack_config['resources'])} resources"
+        }
+    else:
+        raise Exception(f"Failed to trigger stack workflow: {response.status_code} - {response.text}")

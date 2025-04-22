@@ -1,7 +1,7 @@
 import os
 import logging
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -115,3 +115,164 @@ async def execute_terraform(resource_type: str, params: Dict[str, Any]) -> Dict[
             "resource_type": resource_type,
             "message": f"Deployment failed: {str(e)}"
         }
+
+async def execute_terraform_stack(resources: List[Any]) -> Dict[str, Any]:
+    """
+    Execute Terraform for a stack of resources with dependencies
+    
+    Args:
+        resources: List of ResourceDefinition objects with dependencies
+            Each resource has:
+            - resource_type: Type of resource (ec2_instance, s3_bucket, etc.)
+            - name: Name for the resource
+            - environment: Environment (dev, staging, prod)
+            - region: AWS region
+            - parameters: Configuration parameters
+            - dependencies: List of resource IDs this resource depends on
+        
+    Returns:
+        Dict containing the deployment details:
+            - status: Current status of deployment (pending)
+            - deployment_id: Unique identifier for the stack deployment
+            - message: Human-readable status message
+    """
+    try:
+        logger.info(f"Initiating stack deployment with {len(resources)} resources")
+        
+        # Generate a unique stack ID
+        stack_id = f"stack-{int(datetime.now().timestamp())}-{uuid.uuid4().hex[:8]}"
+        
+        # Create a dependency graph of resources
+        resource_map = {resource.id: resource for resource in resources}
+        
+        # Sort resources based on dependencies (topological sort)
+        sorted_resources = sort_resources_by_dependencies(resources)
+        
+        logger.info(f"Resources sorted by dependencies: {[r.name for r in sorted_resources]}")
+        
+        # Prepare the stack configuration for GitHub workflow
+        stack_config = {
+            "stack_id": stack_id,
+            "resources": []
+        }
+        
+        # Process each resource
+        for resource in sorted_resources:
+            # Prepare resource configuration
+            resource_config = {
+                "id": resource.id,
+                "resource_type": resource.resource_type,
+                "name": resource.name,
+                "environment": resource.environment,
+                "region": resource.region,
+                "parameters": resource.parameters,
+                "dependencies": resource.dependencies
+            }
+            
+            # Add resource-specific configurations
+            if resource.resource_type == "ec2_instance":
+                # Map size to instance type if needed
+                if "size" in resource.parameters:
+                    size_mapping = {
+                        "small": "t2.micro",
+                        "medium": "t2.small",
+                        "large": "t2.medium"
+                    }
+                    resource_config["parameters"]["instance_type"] = size_mapping.get(
+                        resource.parameters["size"], "t2.micro"
+                    )
+            
+            # Add to stack configuration
+            stack_config["resources"].append(resource_config)
+        
+        # Trigger the GitHub workflow for stack deployment
+        from src.github_api import trigger_stack_deployment
+        
+        # This will be implemented in github_api.py
+        result = await trigger_stack_deployment(stack_config)
+        
+        # Save stack deployment record
+        from src.supabase import save_stack_deployment
+        
+        await save_stack_deployment({
+            "id": stack_id,
+            "resources": [r.dict() for r in resources],
+            "status": "pending",
+            "created_at": datetime.utcnow().isoformat()
+        })
+        
+        return {
+            "status": "pending",
+            "deployment_id": stack_id,
+            "message": f"Stack deployment initiated with {len(resources)} resources"
+        }
+            
+    except Exception as e:
+        logger.error(f"Error executing stack deployment: {str(e)}")
+        # Generate a unique ID even for failed deployments
+        error_stack_id = f"stack-error-{uuid.uuid4().hex[:8]}"
+        
+        # Record the failed deployment
+        try:
+            from src.supabase import save_stack_deployment
+            
+            await save_stack_deployment({
+                "id": error_stack_id,
+                "resources": [r.dict() for r in resources],
+                "status": "error",
+                "created_at": datetime.utcnow().isoformat(),
+                "error_message": str(e)
+            })
+        except Exception as db_error:
+            logger.error(f"Error saving failed stack deployment: {str(db_error)}")
+        
+        return {
+            "status": "error",
+            "deployment_id": error_stack_id,
+            "message": f"Stack deployment failed: {str(e)}"
+        }
+
+def sort_resources_by_dependencies(resources: List[Any]) -> List[Any]:
+    """
+    Sort resources based on their dependencies using topological sort
+    
+    Args:
+        resources: List of ResourceDefinition objects
+        
+    Returns:
+        Sorted list of resources where dependencies come before dependents
+    """
+    # Create a map of resource ID to resource
+    resource_map = {resource.id: resource for resource in resources}
+    
+    # Create a graph representation
+    graph = {resource.id: set(resource.dependencies) for resource in resources}
+    
+    # Perform topological sort
+    visited = set()
+    temp_mark = set()
+    ordered = []
+    
+    def visit(node):
+        if node in temp_mark:
+            # Cyclic dependency detected
+            raise ValueError(f"Cyclic dependency detected involving resource {node}")
+        
+        if node not in visited:
+            temp_mark.add(node)
+            
+            # Visit dependencies first
+            for dependency in graph[node]:
+                visit(dependency)
+            
+            temp_mark.remove(node)
+            visited.add(node)
+            ordered.append(resource_map[node])
+    
+    # Visit all nodes
+    for resource in resources:
+        if resource.id not in visited:
+            visit(resource.id)
+    
+    # Reverse to get correct order (dependencies first)
+    return list(reversed(ordered))

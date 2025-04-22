@@ -14,9 +14,13 @@ from src.supabase import get_user_by_username
 load_dotenv()
 
 # Security settings from environment variables
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "development-secret-key-not-for-production")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+# For development purposes only - warn if using default secret key
+if SECRET_KEY == "development-secret-key-not-for-production":
+    print("WARNING: Using default JWT secret key. Set JWT_SECRET_KEY environment variable for production.")
 
 # Password context for hashing and verification
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -60,9 +64,21 @@ def get_password_hash(password):
 
 def get_user(username: str) -> Optional[Dict[str, Any]]:
     """Get user from Supabase database"""
+    # Try to get user from Supabase
     user = get_user_by_username(username)
     if user:
         return user
+    
+    # For development purposes only - provide a default admin user
+    if username == "admin" and SECRET_KEY == "development-secret-key-not-for-production":
+        print("WARNING: Using default admin user. This should only be used for development.")
+        return {
+            "username": "admin",
+            "email": "admin@example.com",
+            "password": pwd_context.hash("admin"),  # Default password: admin
+            "role": "admin"
+        }
+    
     return None
 
 def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:

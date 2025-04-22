@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ResourceRequest from './pages/ResourceRequest';
 import DeploymentStatus from './pages/DeploymentStatus';
+import StackDeploymentStatus from './pages/StackDeploymentStatus';
 
 // Components
 import Navbar from './components/Navbar';
@@ -72,6 +73,15 @@ function App() {
                 element={
                   <ProtectedRoute>
                     <DeploymentStatus />
+                  </ProtectedRoute>
+                } 
+              />
+              
+              <Route 
+                path="/stacks/:stackId" 
+                element={
+                  <ProtectedRoute>
+                    <StackDeploymentStatus />
                   </ProtectedRoute>
                 } 
               />

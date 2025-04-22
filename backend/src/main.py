@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import uvicorn
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import timedelta
 
 # Import modules - fixed imports
@@ -51,6 +51,17 @@ class DeploymentResponse(BaseModel):
     request_id: str
     status: str
     message: str
+
+class ResourceDefinition(BaseModel):
+    resource_type: str
+    name: str
+    environment: str
+    region: str = "eu-west-2"
+    parameters: Dict[str, Any] = {}
+    dependencies: List[str] = []
+
+class StackDeploymentRequest(BaseModel):
+    resources: List[ResourceDefinition]
 
 # Helper function to verify passwords
 def verify_password(plain_password, hashed_password):
@@ -203,6 +214,108 @@ async def deployment_webhook(data: dict):
         update_deployment(deployment_id, update_data)
     
     return {"status": "ok"}
+
+@app.post("/api/deployments/create-stack", response_model=DeploymentResponse)
+async def create_infrastructure_stack(
+    request: StackDeploymentRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Deploy a stack of multiple infrastructure resources with dependencies"""
+    # Check if user has permission
+    if current_user.role not in ["admin", "developer"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to provision resources"
+        )
+    
+    try:
+        # Import here to avoid circular imports
+        from src.terraform import execute_terraform_stack
+        
+        # Process the stack deployment
+        result = await execute_terraform_stack(
+            resources=request.resources
+        )
+        
+        return DeploymentResponse(
+            request_id=result["deployment_id"],
+            status="pending",
+            message=f"Stack deployment initiated with {len(request.resources)} resources"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@app.post("/api/webhook/stack-deployment")
+async def stack_deployment_webhook(data: dict):
+    """Receive stack deployment updates from GitHub Actions"""
+    # Verify a shared secret
+    webhook_secret = os.getenv("WEBHOOK_SECRET")
+    if data.get("secret") != webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+        
+    stack_id = data.get("stack_id")
+    from src.supabase import update_stack_deployment, save_stack_deployment, get_stack_deployment, update_stack_resource
+    
+    # Update the overall stack status
+    update_data = {
+        "status": data.get("status"),
+        "outputs": data.get("outputs", {}),
+        "completed_at": data.get("completed_at") if data.get("status") in ["completed", "failed"] else None
+    }
+    
+    # Check if the stack deployment exists
+    existing_stack = get_stack_deployment(stack_id)
+    
+    if not existing_stack:
+        # Create new stack deployment record
+        update_data["id"] = stack_id
+        update_data["created_at"] = data.get("created_at")
+        save_stack_deployment(update_data)
+    else:
+        # Update existing stack deployment
+        update_stack_deployment(stack_id, update_data)
+    
+    # Update individual resource statuses if provided
+    if "resources" in data and isinstance(data["resources"], list):
+        for resource in data["resources"]:
+            resource_id = resource.get("id")
+            if resource_id:
+                resource_update = {
+                    "status": resource.get("status"),
+                    "outputs": resource.get("outputs", {}),
+                    "completed_at": resource.get("completed_at") if resource.get("status") in ["completed", "failed"] else None
+                }
+                update_stack_resource(stack_id, resource_id, resource_update)
+    
+    return {"status": "ok"}
+
+@app.get("/api/stacks/{stack_id}/status")
+async def get_stack_status(
+    stack_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get the status of a stack deployment and all its resources"""
+    from src.supabase import get_stack_deployment, get_stack_resources
+    
+    # Get the stack deployment
+    stack = get_stack_deployment(stack_id)
+    if not stack:
+        raise HTTPException(status_code=404, detail="Stack deployment not found")
+    
+    # Get all resources in the stack
+    resources = get_stack_resources(stack_id)
+    
+    return {
+        "stack_id": stack_id,
+        "status": stack.get("status", "pending"),
+        "created_at": stack.get("created_at"),
+        "completed_at": stack.get("completed_at"),
+        "outputs": stack.get("outputs", {}),
+        "resources": resources
+    }
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

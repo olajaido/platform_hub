@@ -1,0 +1,376 @@
+# .github/workflows/terraform-stack-deploy.yml
+name: Deploy Infrastructure Stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_id:
+        description: 'ID of the stack to deploy'
+        required: true
+        type: string
+      
+      resources_json:
+        description: 'JSON configuration of resources in the stack'
+        required: true
+        type: string
+      
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      
+      region:
+        description: 'AWS region'
+        required: true
+        default: 'eu-west-2'
+        type: choice
+        options:
+          - eu-west-2
+          - us-east-1
+          - us-west-2
+          - eu-west-1
+
+jobs:
+  terraform:
+    name: 'Terraform Stack Deploy'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ github.event.inputs.region }}
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.4.6
+    
+    - name: Parse Resources JSON
+      id: parse_resources
+      run: |
+        echo "resources=${{ github.event.inputs.resources_json }}" > resources.json
+        echo "Stack ID: ${{ github.event.inputs.stack_id }}"
+        cat resources.json
+    
+    - name: Generate Terraform Configuration
+      run: |
+        mkdir -p terraform-stack
+        
+        # Create variables.tf
+        cat > terraform-stack/variables.tf << EOF
+        variable "region" {
+          description = "AWS region"
+          type        = string
+          default     = "${{ github.event.inputs.region }}"
+        }
+        
+        variable "environment" {
+          description = "Environment (dev, staging, prod)"
+          type        = string
+          default     = "${{ github.event.inputs.environment }}"
+        }
+        
+        variable "stack_id" {
+          description = "Stack ID"
+          type        = string
+          default     = "${{ github.event.inputs.stack_id }}"
+        }
+        
+        # Common VPC variables
+        variable "vpc_id" {
+          description = "VPC ID"
+          type        = string
+          default     = "vpc-12345678" # Replace with actual VPC ID or make configurable
+        }
+        
+        variable "subnet_ids" {
+          description = "List of subnet IDs"
+          type        = list(string)
+          default     = ["subnet-12345678", "subnet-87654321"] # Replace with actual subnet IDs or make configurable
+        }
+        EOF
+        
+        # Create providers.tf
+        cat > terraform-stack/providers.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
+        terraform {
+          backend "s3" {
+            bucket = "platform-hub-terraform-state"
+            key    = "stacks/${{ github.event.inputs.stack_id }}/terraform.tfstate"
+            region = "${{ github.event.inputs.region }}"
+          }
+          
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 4.0"
+            }
+          }
+        }
+        EOF
+        
+        # Create main.tf with resource modules
+        cat > terraform-stack/main.tf << EOF
+        # Parse the JSON resources
+        locals {
+          resources_json = jsondecode(file("../resources.json"))
+          resources = local.resources_json.resources
+        }
+        
+        # Process each resource based on type
+        EOF
+        
+        # Add resource modules dynamically based on the resources JSON
+        python -c '
+        import json
+        import os
+        
+        # Load resources JSON
+        with open("resources.json", "r") as f:
+            data = json.load(f)
+        
+        resources = json.loads(data["resources"])
+        
+        # Generate module blocks for each resource
+        with open("terraform-stack/main.tf", "a") as f:
+            # Track dependencies
+            deps = {}
+            
+            # First pass: create all resources
+            for resource in resources:
+                resource_id = resource["id"]
+                resource_type = resource["type"]
+                resource_name = resource["name"]
+                resource_config = resource["config"]
+                
+                f.write(f"""
+        # {resource_name} ({resource_type})
+        module "{resource_id}" {{
+          source = "../../terraform/modules/{resource_type}"
+          
+          name = "{resource_name}"
+          deployment_id = var.stack_id
+          environment = var.environment
+          region = var.region
+        """)
+                
+                # Add resource-specific configuration
+                if resource_type == "ec2_instance":
+                    f.write(f"""
+          instance_type = "{resource_config.get("instance_type", "t2.micro")}"
+          subnet_id = var.subnet_ids[0]
+          security_group_ids = {json.dumps(resource_config.get("security_group_ids", []))}
+          key_name = "{resource_config.get("key_name", "")}"
+          root_volume_size = {resource_config.get("root_volume_size", 20)}
+          root_volume_type = "{resource_config.get("root_volume_type", "gp2")}"
+        """)
+                elif resource_type == "s3_bucket":
+                    f.write(f"""
+          bucket_name = "{resource_config.get("bucket_name", resource_name)}"
+        """)
+                elif resource_type == "rds_instance":
+                    f.write(f"""
+          vpc_id = var.vpc_id
+          subnet_ids = var.subnet_ids
+          allocated_storage = {resource_config.get("allocated_storage", 20)}
+          engine = "{resource_config.get("engine", "mysql")}"
+          instance_class = "{resource_config.get("instance_class", "db.t3.micro")}"
+          username = "{resource_config.get("username", "admin")}"
+          password = "{resource_config.get("password", "Password123!")}"
+          multi_az = {str(resource_config.get("multi_az", False)).lower()}
+          security_group_ids = {json.dumps(resource_config.get("security_group_ids", []))}
+        """)
+                elif resource_type == "security_group":
+                    ingress_rules = resource_config.get("rules", [])
+                    ingress_rules_json = json.dumps([{
+                        "from_port": rule.get("port_range", "22").split("-")[0],
+                        "to_port": rule.get("port_range", "22").split("-")[-1],
+                        "protocol": rule.get("protocol", "tcp"),
+                        "cidr_blocks": [rule.get("source", "0.0.0.0/0")],
+                        "description": rule.get("type", "Custom rule")
+                    } for rule in ingress_rules])
+                    
+                    f.write(f"""
+          vpc_id = var.vpc_id
+          description = "{resource_config.get("description", "Security group created by Terraform")}"
+          ingress_rules = {ingress_rules_json}
+        """)
+                elif resource_type == "load_balancer":
+                    f.write(f"""
+          vpc_id = var.vpc_id
+          subnet_ids = var.subnet_ids
+          security_group_ids = {json.dumps(resource_config.get("security_group_ids", []))}
+          internal = {str(resource_config.get("scheme", "internet-facing") == "internal").lower()}
+        """)
+                elif resource_type == "ecs_service":
+                    f.write(f"""
+          subnet_ids = var.subnet_ids
+          security_group_ids = {json.dumps(resource_config.get("security_group_ids", []))}
+          container_image = "{resource_config.get("task_definition", "nginx:latest")}"
+          desired_count = {resource_config.get("desired_count", 1)}
+          deployment_controller_type = "{resource_config.get("deployment_strategy", "ECS")}"
+          execution_role_arn = "arn:aws:iam::123456789012:role/ecsTaskExecutionRole" # Replace with actual role ARN
+        """)
+                elif resource_type == "elastic_ip":
+                    f.write(f"""
+          instance_id = "{resource_config.get("associate_with", "")}"
+        """)
+                
+                f.write("\n}\n")
+                
+                # Track dependencies
+                if "dependencies" in resource:
+                    deps[resource_id] = resource["dependencies"]
+            
+            # Second pass: add dependency relationships
+            f.write("\n# Resource dependencies\n")
+            for resource_id, dependencies in deps.items():
+                if dependencies:
+                    dep_str = ", ".join([f"module.{dep}" for dep in dependencies])
+                    f.write(f"""
+        # {resource_id} depends on {", ".join(dependencies)}
+        resource "null_resource" "{resource_id}_depends_on" {{
+          depends_on = [{dep_str}]
+        }}
+        """)
+        '
+        
+        # Create outputs.tf
+        cat > terraform-stack/outputs.tf << EOF
+        # Stack outputs
+        output "stack_id" {
+          value = var.stack_id
+          description = "Stack ID"
+        }
+        
+        # Resource outputs will be generated dynamically
+        EOF
+        
+        # Add resource-specific outputs
+        python -c '
+        import json
+        import os
+        
+        # Load resources JSON
+        with open("resources.json", "r") as f:
+            data = json.load(f)
+        
+        resources = json.loads(data["resources"])
+        
+        # Generate output blocks for each resource
+        with open("terraform-stack/outputs.tf", "a") as f:
+            for resource in resources:
+                resource_id = resource["id"]
+                resource_type = resource["type"]
+                resource_name = resource["name"]
+                
+                f.write(f"""
+        # {resource_name} outputs
+        output "{resource_id}_id" {{
+          value = module.{resource_id}.id
+          description = "ID of {resource_name}"
+        }}
+        """)
+                
+                # Add resource-specific outputs
+                if resource_type == "ec2_instance":
+                    f.write(f"""
+        output "{resource_id}_public_ip" {{
+          value = module.{resource_id}.public_ip
+          description = "Public IP of {resource_name}"
+        }}
+        
+        output "{resource_id}_private_ip" {{
+          value = module.{resource_id}.private_ip
+          description = "Private IP of {resource_name}"
+        }}
+        """)
+                elif resource_type == "s3_bucket":
+                    f.write(f"""
+        output "{resource_id}_bucket_domain_name" {{
+          value = module.{resource_id}.bucket_domain_name
+          description = "Domain name of {resource_name}"
+        }}
+        """)
+                elif resource_type == "rds_instance":
+                    f.write(f"""
+        output "{resource_id}_endpoint" {{
+          value = module.{resource_id}.endpoint
+          description = "Endpoint of {resource_name}"
+        }}
+        """)
+                elif resource_type == "load_balancer":
+                    f.write(f"""
+        output "{resource_id}_dns_name" {{
+          value = module.{resource_id}.dns_name
+          description = "DNS name of {resource_name}"
+        }}
+        """)
+                elif resource_type == "elastic_ip":
+                    f.write(f"""
+        output "{resource_id}_public_ip" {{
+          value = module.{resource_id}.public_ip
+          description = "Public IP of {resource_name}"
+        }}
+        """)
+        '
+    
+    - name: Terraform Init
+      working-directory: terraform-stack
+      run: terraform init
+    
+    - name: Terraform Plan
+      working-directory: terraform-stack
+      run: terraform plan -out=tfplan
+    
+    - name: Terraform Apply
+      working-directory: terraform-stack
+      run: terraform apply -auto-approve tfplan
+    
+    - name: Update Deployment Status
+      run: |
+        # Send deployment status update to the Platform Hub API
+        WEBHOOK_URL="https://platform-hub.onrender.com/api/webhook/stack-deployment"
+        WEBHOOK_SECRET="${{ secrets.WEBHOOK_SECRET }}"
+        STACK_ID="${{ github.event.inputs.stack_id }}"
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Extract outputs from terraform output (if available)
+        cd terraform-stack
+        OUTPUTS_JSON=$(terraform output -json 2>/dev/null || echo "{}")
+        
+        # Create the webhook payload
+        cat > webhook_payload.json << EOF
+        {
+          "secret": "${WEBHOOK_SECRET}",
+          "stack_id": "${STACK_ID}",
+          "status": "completed",
+          "completed_at": "${TIMESTAMP}",
+          "outputs": ${OUTPUTS_JSON},
+          "resources": []
+        }
+        EOF
+        
+        # Send the webhook request
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d @webhook_payload.json \
+          ${WEBHOOK_URL}
+        
+        echo "Stack deployment completed successfully"
+        echo "Stack ID: ${STACK_ID}"
