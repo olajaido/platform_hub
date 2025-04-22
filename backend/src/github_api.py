@@ -1,6 +1,7 @@
 # src/github_api.py
 import os
 import httpx
+import json
 from typing import Dict, Any
 from dotenv import load_dotenv
 
@@ -46,19 +47,55 @@ async def trigger_infrastructure_deployment(
         "region": region
     }
     
-    # Add resource-specific parameters
+    # Add subnet_id as it's a special parameter that can be passed directly
+    if "subnet_id" in deployment_params:
+        inputs["subnet_id"] = deployment_params.get("subnet_id")
+    
+    # Create resource-specific config JSON
+    config = {}
+    
+    # Add resource-specific parameters to config
     if resource_type == "ec2_instance":
-        inputs.update({
+        config.update({
             "instance_type": deployment_params.get("instance_type", "t2.micro"),
             "volume_size": deployment_params.get("volume_size", "20"),
-            "assign_eip": deployment_params.get("assign_eip", "true"),
-            "subnet_id": deployment_params.get("subnet_id", "subnet-07759e500cfdfb6b2")
+            "assign_eip": deployment_params.get("assign_eip", "true")
         })
     elif resource_type == "s3_bucket":
-        inputs.update({
+        config.update({
             "bucket_name": deployment_params.get("bucket_name"),
             "versioning_enabled": deployment_params.get("versioning_enabled", "false")
         })
+    elif resource_type == "rds_instance":
+        config.update({
+            "engine": deployment_params.get("engine", "mysql"),
+            "engine_version": deployment_params.get("engine_version", "8.0"),
+            "instance_class": deployment_params.get("instance_class", "db.t3.micro"),
+            "allocated_storage": deployment_params.get("allocated_storage", "20"),
+            "master_username": deployment_params.get("master_username", "admin"),
+            "multi_az": deployment_params.get("multi_az", "false")
+        })
+    elif resource_type == "ecs_service":
+        config.update({
+            "container_image": deployment_params.get("container_image", "nginx:latest"),
+            "container_port": deployment_params.get("container_port", "80"),
+            "cpu": deployment_params.get("cpu", "256"),
+            "memory": deployment_params.get("memory", "512"),
+            "launch_type": deployment_params.get("launch_type", "FARGATE")
+        })
+    elif resource_type == "alb":
+        config.update({
+            "internal": deployment_params.get("internal", "false")
+        })
+    elif resource_type == "security_group":
+        config.update({
+            "sg_description": deployment_params.get("sg_description", "Managed by Terraform"),
+            "vpc_id": deployment_params.get("vpc_id", "vpc-default"),
+            "ingress_rules": deployment_params.get("ingress_rules", [{"from_port":80,"to_port":80,"protocol":"tcp","cidr_blocks":["0.0.0.0/0"],"description":"HTTP"}])
+        })
+        
+    # Add config JSON to inputs
+    inputs["config_json"] = json.dumps(config)
     
     # Payload for GitHub API
     payload = {
@@ -98,7 +135,7 @@ async def trigger_infrastructure_deployment(
             "environment": environment,
             "region": region,
             "status": "pending",
-            "parameters": inputs,
+            "parameters": {**inputs, **deployment_params},
             "created_at": datetime.utcnow().isoformat()
         })
         
