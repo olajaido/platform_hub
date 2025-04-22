@@ -29,6 +29,10 @@ interface FormValues {
     name: string;
     environment: string;
     subnet_id?: string;
+    engine?: string;
+    engine_version?: string;
+    container_image?: string;
+    vpc_id?: string;
   };
 }
 
@@ -47,6 +51,10 @@ const ResourceSchema = Yup.object().shape({
 const resourceTypes = [
   { value: 'ec2_instance', label: 'EC2 Instance' },
   { value: 's3_bucket', label: 'S3 Bucket' },
+  { value: 'rds_instance', label: 'RDS Database' },
+  { value: 'ecs_service', label: 'ECS Service' },
+  { value: 'alb', label: 'Application Load Balancer' },
+  { value: 'security_group', label: 'Security Group' },
 ];
 
 const sizes = [
@@ -80,12 +88,20 @@ const subnets = [
 const steps = ['Resource Selection', 'Configuration', 'Review'];
 
 // Function to map size to instance type
-function getSizeMapping(size: string): string {
+function getSizeMapping(size: string, type?: string): string {
   const mapping: Record<string, string> = {
     'small': 't2.micro',
     'medium': 't2.small',
     'large': 't2.medium'
   };
+  if (type === 'db') {
+    const dbMapping: Record<string, string> = {
+      'small': 'db.t2.micro',
+      'medium': 'db.t2.small',
+      'large': 'db.t2.medium'
+    };
+    return dbMapping[size] || 'db.t2.micro';
+  }
   return mapping[size] || 't2.micro';
 }
 
@@ -108,18 +124,63 @@ const ResourceRequestForm = () => {
     setError(null);
     
     try {
-      // Format the request for the new endpoint
+      // Base request parameters
       const request = {
         resource_type: values.resourceType,
         name: values.parameters.name,
         environment: values.parameters.environment,
         region: values.region,
-        parameters: {
-          instance_type: getSizeMapping(values.size),
-          volume_size: "20",
-          subnet_id: values.parameters.subnet_id || "subnet-07759e500cfdfb6b2"
-        }
+        parameters: {}
       };
+      
+      // Add resource-specific parameters
+      switch(values.resourceType) {
+        case 'ec2_instance':
+          request.parameters = {
+            instance_type: getSizeMapping(values.size),
+            volume_size: "20",
+            subnet_id: values.parameters.subnet_id || "subnet-07759e500cfdfb6b2"
+          };
+          break;
+        case 's3_bucket':
+          request.parameters = {
+            versioning_enabled: values.size !== 'small' ? "true" : "false"
+          };
+          break;
+        case 'rds_instance':
+          request.parameters = {
+            engine: values.parameters.engine || "mysql",
+            engine_version: values.parameters.engine_version || "8.0",
+            instance_class: getSizeMapping(values.size, 'db'),
+            allocated_storage: values.size === 'small' ? "20" : values.size === 'medium' ? "50" : "100",
+            master_username: "admin",
+            multi_az: values.size === 'large' ? "true" : "false",
+            subnet_id: values.parameters.subnet_id || "subnet-07759e500cfdfb6b2"
+          };
+          break;
+        case 'ecs_service':
+          request.parameters = {
+            container_image: values.parameters.container_image || "nginx:latest",
+            container_port: "80",
+            cpu: values.size === 'small' ? "256" : values.size === 'medium' ? "512" : "1024",
+            memory: values.size === 'small' ? "512" : values.size === 'medium' ? "1024" : "2048",
+            launch_type: "FARGATE",
+            subnet_id: values.parameters.subnet_id || "subnet-07759e500cfdfb6b2"
+          };
+          break;
+        case 'alb':
+          request.parameters = {
+            internal: "false",
+            subnet_id: values.parameters.subnet_id || "subnet-07759e500cfdfb6b2"
+          };
+          break;
+        case 'security_group':
+          request.parameters = {
+            sg_description: `Security group for ${values.parameters.name} in ${values.parameters.environment}`,
+            vpc_id: "vpc-12345678"
+          };
+          break;
+      }
    
       // Send to backend - now using the new deployments/create endpoint
       const response = await apiClient.post('/api/deployments/create', request, {
@@ -168,7 +229,11 @@ const ResourceRequestForm = () => {
             parameters: {
               name: '',
               environment: 'dev',
-              subnet_id: 'subnet-07759e500cfdfb6b2'
+              subnet_id: 'subnet-07759e500cfdfb6b2',
+              engine: 'mysql',
+              engine_version: '8.0',
+              container_image: 'nginx:latest',
+              vpc_id: 'vpc-12345678'
             },
           }}
           validationSchema={ResourceSchema}
@@ -274,6 +339,98 @@ const ResourceRequestForm = () => {
                       </Field>
                     </GridItem>
                   )}
+
+                  {values.resourceType === 'rds_instance' && (
+                    <>
+                      <GridItem xs={12} sm={6}>
+                        <Field
+                          component={Select}
+                          name="parameters.engine"
+                          label="Database Engine"
+                          fullWidth
+                          variant="outlined"
+                          initialValue="mysql"
+                        >
+                          <MenuItem value="mysql">MySQL</MenuItem>
+                          <MenuItem value="postgres">PostgreSQL</MenuItem>
+                          <MenuItem value="mariadb">MariaDB</MenuItem>
+                        </Field>
+                      </GridItem>
+                      <GridItem xs={12} sm={6}>
+                        <Field
+                          component={TextField}
+                          name="parameters.engine_version"
+                          label="Engine Version"
+                          fullWidth
+                          variant="outlined"
+                          placeholder="e.g. 8.0"
+                        />
+                      </GridItem>
+                      <GridItem xs={12}>
+                        <Field
+                          component={Select}
+                          name="parameters.subnet_id"
+                          label="Subnet"
+                          fullWidth
+                          variant="outlined"
+                        >
+                          {subnets.map(option => (
+                            <MenuItem key={option.value} value={option.value}>
+                              {option.label}
+                            </MenuItem>
+                          ))}
+                        </Field>
+                      </GridItem>
+                    </>
+                  )}
+
+                  {values.resourceType === 'ecs_service' && (
+                    <>
+                      <GridItem xs={12}>
+                        <Field
+                          component={TextField}
+                          name="parameters.container_image"
+                          label="Container Image"
+                          fullWidth
+                          variant="outlined"
+                          placeholder="e.g. nginx:latest"
+                        />
+                      </GridItem>
+                      <GridItem xs={12}>
+                        <Field
+                          component={Select}
+                          name="parameters.subnet_id"
+                          label="Subnet"
+                          fullWidth
+                          variant="outlined"
+                        >
+                          {subnets.map(option => (
+                            <MenuItem key={option.value} value={option.value}>
+                              {option.label}
+                            </MenuItem>
+                          ))}
+                        </Field>
+                      </GridItem>
+                    </>
+                  )}
+
+                  {values.resourceType === 'alb' && (
+                    <GridItem xs={12}>
+                      <Field
+                        component={Select}
+                        name="parameters.subnet_id"
+                        label="Subnet"
+                        fullWidth
+                        variant="outlined"
+                      >
+                        {subnets.map(option => (
+                          <MenuItem key={option.value} value={option.value}>
+                            {option.label}
+                          </MenuItem>
+                        ))}
+                      </Field>
+                    </GridItem>
+                  )}
                 </Grid>
               )}
               
@@ -327,6 +484,7 @@ const ResourceRequestForm = () => {
                       </Typography>
                     </GridItem>
                     
+                    {/* EC2 specific parameters */}
                     {values.resourceType === 'ec2_instance' && values.parameters.subnet_id && (
                       <>
                         <GridItem xs={6}>
@@ -336,6 +494,148 @@ const ResourceRequestForm = () => {
                           <Typography variant="body1">
                             {subnets.find(s => s.value === values.parameters.subnet_id)?.label || values.parameters.subnet_id}
                           </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Instance Type:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">{getSizeMapping(values.size)}</Typography>
+                        </GridItem>
+                      </>
+                    )}
+                    
+                    {/* S3 specific parameters */}
+                    {values.resourceType === 's3_bucket' && (
+                      <>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Versioning:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">{values.size !== 'small' ? 'Enabled' : 'Disabled'}</Typography>
+                        </GridItem>
+                      </>
+                    )}
+                    
+                    {/* RDS specific parameters */}
+                    {values.resourceType === 'rds_instance' && (
+                      <>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Database Engine:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {(values.parameters as any).engine || "MySQL"}
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Engine Version:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {(values.parameters as any).engine_version || "8.0"}
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Instance Class:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">{getSizeMapping(values.size, 'db')}</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Storage:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {values.size === 'small' ? "20GB" : values.size === 'medium' ? "50GB" : "100GB"}
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Multi-AZ:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">{values.size === 'large' ? "Yes" : "No"}</Typography>
+                        </GridItem>
+                      </>
+                    )}
+                    
+                    {/* ECS specific parameters */}
+                    {values.resourceType === 'ecs_service' && (
+                      <>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Container Image:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {(values.parameters as any).container_image || "nginx:latest"}
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Container Port:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">80</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">CPU:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {values.size === 'small' ? "256" : values.size === 'medium' ? "512" : "1024"} CPU units
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Memory:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {values.size === 'small' ? "512" : values.size === 'medium' ? "1024" : "2048"} MB
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Launch Type:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">FARGATE</Typography>
+                        </GridItem>
+                      </>
+                    )}
+                    
+                    {/* ALB specific parameters */}
+                    {values.resourceType === 'alb' && (
+                      <>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Scheme:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">Internet-facing</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Subnet:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            {subnets.find(s => s.value === values.parameters.subnet_id)?.label || values.parameters.subnet_id || "Default subnet"}
+                          </Typography>
+                        </GridItem>
+                      </>
+                    )}
+                    
+                    {/* Security Group specific parameters */}
+                    {values.resourceType === 'security_group' && (
+                      <>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">Description:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">
+                            Security group for {values.parameters.name} in {values.parameters.environment}
+                          </Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="subtitle1">VPC:</Typography>
+                        </GridItem>
+                        <GridItem xs={6}>
+                          <Typography variant="body1">Default VPC</Typography>
                         </GridItem>
                       </>
                     )}
