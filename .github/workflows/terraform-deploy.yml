@@ -41,164 +41,26 @@ on:
           - us-west-2
           - eu-west-1
       
-      # EC2 specific inputs
-      instance_type:
-        description: 'EC2 instance type (for EC2 only)'
-        required: false
-        default: 't2.micro'
+      # Core resource parameters as JSON
+      config_json:
+        description: 'Resource configuration as JSON (see documentation for format)'
+        required: false 
         type: string
+        default: '{}'
       
-      volume_size:
-        description: 'Root volume size in GB (for EC2 only)'
-        required: false
-        default: '20'
-        type: string
-      
-      assign_eip:
-        description: 'Assign Elastic IP to EC2 instance'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      
-      # VPC related inputs
-      vpc_id:
-        description: 'VPC ID for the resource'
-        required: false
-        default: 'vpc-01234567890abcdef'
-        type: string
-        
+      # At least one networking parameter
       subnet_id:
-        description: 'Subnet for EC2 or primary subnet for other resources'
+        description: 'Primary subnet ID for the resource'
         required: false
         default: 'subnet-07759e500cfdfb6b2'
-        type: choice
-        options:
-          - 'subnet-07759e500cfdfb6b2' # eu-west-2a
-          - 'subnet-0d95a35be6e1fb603' # eu-west-2b
-          - 'subnet-00e88d7e1a6b7c689' # eu-west-2c
-      
-      # S3 specific inputs
-      bucket_name:
-        description: 'S3 bucket name (for S3 only)'
-        required: false
-        type: string
-      
-      versioning_enabled:
-        description: 'Enable versioning for S3 bucket'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      
-      # RDS specific inputs
-      engine:
-        description: 'Database engine (for RDS only)'
-        required: false
-        default: 'mysql'
-        type: choice
-        options:
-          - 'mysql'
-          - 'postgres'
-          - 'aurora-mysql'
-          - 'aurora-postgresql'
-      
-      engine_version:
-        description: 'Database engine version (for RDS only)'
-        required: false
-        default: '8.0'
-        type: string
-      
-      instance_class:
-        description: 'RDS instance class (for RDS only)'
-        required: false
-        default: 'db.t3.micro'
-        type: string
-      
-      allocated_storage:
-        description: 'Database storage size in GB (for RDS only)'
-        required: false
-        default: '20'
-        type: string
-      
-      master_username:
-        description: 'Database master username (for RDS only)'
-        required: false
-        default: 'admin'
-        type: string
-        
-      multi_az:
-        description: 'Enable Multi-AZ deployment for RDS'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      
-      # ECS specific inputs
-      container_image:
-        description: 'Container image (for ECS only, e.g. nginx:latest)'
-        required: false
-        default: 'nginx:latest'
-        type: string
-      
-      container_port:
-        description: 'Container port (for ECS only)'
-        required: false
-        default: '80'
-        type: string
-      
-      cpu:
-        description: 'CPU units for ECS task (256=0.25vCPU)'
-        required: false
-        default: '256'
-        type: string
-      
-      memory:
-        description: 'Memory for ECS task in MB'
-        required: false
-        default: '512'
-        type: string
-      
-      launch_type:
-        description: 'ECS launch type'
-        required: false
-        default: 'FARGATE'
-        type: choice
-        options:
-          - 'FARGATE'
-          - 'EC2'
-      
-      # ALB specific inputs
-      internal:
-        description: 'Whether the ALB should be internal'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      
-      # Security Group specific inputs
-      sg_description:
-        description: 'Security group description'
-        required: false
-        default: 'Managed by Terraform'
-        type: string
-      
-      ingress_rules:
-        description: 'Ingress rules in JSON format (for Security Group only)'
-        required: false
-        default: '[{"from_port":80,"to_port":80,"protocol":"tcp","cidr_blocks":["0.0.0.0/0"],"description":"HTTP"}]'
         type: string
 
 env:
-    APP_WEBHOOK_URL: https://platform-hub.onrender.com/api/webhook/deployment
+    TF_STATE_BUCKET: "platform-hub-terraform-state"
+    TF_STATE_KEY: "${{ github.event.inputs.environment }}/${{ github.event.inputs.resource_type }}/${{ github.event.inputs.name }}.tfstate"
+    TF_STATE_REGION: "${{ github.event.inputs.region }}"
+    AWS_REGION: "${{ github.event.inputs.region }}"
+    APP_WEBHOOK_URL: "${{ secrets.APP_WEBHOOK_URL }}"
     SECURITY_GROUP_ID: "sg-060323606252babd1"
 
 jobs:
@@ -231,118 +93,183 @@ jobs:
     
     - name: Generate Deployment ID
       id: deployment_id
-      run: echo "id=deploy-$(date +%s)" >> $GITHUB_OUTPUT
+      run: |
+        TIMESTAMP=$(date +%s)
+        RANDOM_SUFFIX=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
+        echo "id=deploy-${TIMESTAMP}-${RANDOM_SUFFIX}" >> $GITHUB_OUTPUT
+    
+    - name: Parse Configuration
+      id: config
+      run: |
+        # Set default values based on resource type
+        case "${{ github.event.inputs.resource_type }}" in
+          ec2_instance)
+            echo "instance_type=t2.micro" >> $GITHUB_OUTPUT
+            echo "volume_size=20" >> $GITHUB_OUTPUT
+            echo "assign_eip=true" >> $GITHUB_OUTPUT
+            ;;
+          s3_bucket)
+            echo "versioning_enabled=false" >> $GITHUB_OUTPUT
+            echo "bucket_name=${{ github.event.inputs.name }}-${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            ;;
+          rds_instance)
+            echo "engine=mysql" >> $GITHUB_OUTPUT
+            echo "engine_version=8.0" >> $GITHUB_OUTPUT
+            echo "instance_class=db.t3.micro" >> $GITHUB_OUTPUT
+            echo "allocated_storage=20" >> $GITHUB_OUTPUT
+            echo "master_username=admin" >> $GITHUB_OUTPUT
+            echo "multi_az=false" >> $GITHUB_OUTPUT
+            ;;
+          ecs_service)
+            echo "container_image=nginx:latest" >> $GITHUB_OUTPUT
+            echo "container_port=80" >> $GITHUB_OUTPUT
+            echo "cpu=256" >> $GITHUB_OUTPUT
+            echo "memory=512" >> $GITHUB_OUTPUT
+            echo "launch_type=FARGATE" >> $GITHUB_OUTPUT
+            ;;
+          alb)
+            echo "internal=false" >> $GITHUB_OUTPUT
+            ;;
+          security_group)
+            echo "sg_description=Managed by Terraform" >> $GITHUB_OUTPUT
+            echo "vpc_id=vpc-default" >> $GITHUB_OUTPUT
+            echo 'ingress_rules=[{"from_port":80,"to_port":80,"protocol":"tcp","cidr_blocks":["0.0.0.0/0"],"description":"HTTP"}]' >> $GITHUB_OUTPUT
+            ;;
+        esac
+        
+        # If JSON is provided, override defaults by parsing it
+        if [ -n "${{ github.event.inputs.config_json }}" ] && [ "${{ github.event.inputs.config_json }}" != "{}" ]; then
+          echo "Parsing configuration JSON..."
+          CONFIG='${{ github.event.inputs.config_json }}'
+          
+          # Parse each property from the JSON and add to output
+          for key in $(echo "$CONFIG" | jq -r 'keys[]'); do
+            value=$(echo "$CONFIG" | jq -r --arg k "$key" '.[$k]')
+            echo "$key=$value" >> $GITHUB_OUTPUT
+          done
+        fi
     
     - name: Generate Terraform Configuration
+      id: generate_terraform
       run: |
         mkdir -p terraform-config
         
-        # Create variables.tf to declare all variables
+        # Create variables.tf
         cat > terraform-config/variables.tf << EOF
-        variable "deployment_id" {
-          description = "Unique identifier for this deployment"
-          type        = string
-        }
-        
         # Common variables
-        variable "region" {
-          description = "AWS region for the resources"
-          type        = string
-          default     = "${{ github.event.inputs.region }}"
-        }
-        
-        variable "environment" {
-          description = "Deployment environment (dev, staging, prod)"
-          type        = string
-          default     = "${{ github.event.inputs.environment }}"
-        }
-        
         variable "name" {
           description = "Resource name"
           type        = string
           default     = "${{ github.event.inputs.name }}"
         }
         
-        # Networking variables
-        variable "vpc_id" {
-          description = "VPC ID for the resource"
+        variable "environment" {
+          description = "Environment (dev, staging, prod)"
           type        = string
-          default     = "${{ github.event.inputs.vpc_id }}"
+          default     = "${{ github.event.inputs.environment }}"
+        }
+        
+        variable "region" {
+          description = "AWS region"
+          type        = string
+          default     = "${{ github.event.inputs.region }}"
         }
         
         variable "subnet_id" {
-          description = "Primary subnet ID"
+          description = "Subnet ID"
           type        = string
           default     = "${{ github.event.inputs.subnet_id }}"
         }
         
+        variable "deployment_id" {
+          description = "Unique deployment ID"
+          type        = string
+          default     = "${{ steps.deployment_id.outputs.id }}"
+        }
+        
+        # Resource-specific variables
+        # These will vary depending on the resource type
+        EOF
+        
+        # Add resource-specific variables based on resource type
+        case "${{ github.event.inputs.resource_type }}" in
+          ec2_instance)
+            cat >> terraform-config/variables.tf << EOF
         # EC2 specific variables
         variable "instance_type" {
           description = "EC2 instance type"
           type        = string
-          default     = "${{ github.event.inputs.instance_type }}"
+          default     = "${{ steps.config.outputs.instance_type }}"
         }
         
         variable "root_volume_size" {
-          description = "Size in GB for the root volume"
+          description = "Root volume size in GB"
           type        = number
-          default     = ${{ github.event.inputs.volume_size }}
+          default     = ${{ steps.config.outputs.volume_size }}
         }
         
         variable "assign_eip" {
-          description = "Whether to assign Elastic IP to the instance"
+          description = "Whether to assign an Elastic IP"
           type        = bool
-          default     = ${{ github.event.inputs.assign_eip }}
+          default     = ${{ steps.config.outputs.assign_eip }}
         }
         
         variable "security_group_ids" {
-          description = "List of security group IDs"
+          description = "Security group IDs"
           type        = list(string)
-          default     = ["${{ env.SECURITY_GROUP_ID }}"]
+          default     = ["${SECURITY_GROUP_ID}"]
         }
-        
+        EOF
+            ;;
+            
+          s3_bucket)
+            cat >> terraform-config/variables.tf << EOF
         # S3 specific variables
         variable "bucket_name" {
-          description = "Name of the S3 bucket"
+          description = "S3 bucket name"
           type        = string
-          default     = "${{ github.event.inputs.bucket_name }}"
+          default     = "${{ steps.config.outputs.bucket_name }}"
         }
         
         variable "versioning_enabled" {
-          description = "Whether to enable bucket versioning"
+          description = "Enable versioning for S3 bucket"
           type        = bool
-          default     = ${{ github.event.inputs.versioning_enabled || 'false' }}
+          default     = ${{ steps.config.outputs.versioning_enabled }}
         }
-        
+        EOF
+            ;;
+            
+          rds_instance)
+            cat >> terraform-config/variables.tf << EOF
         # RDS specific variables
         variable "engine" {
           description = "Database engine"
           type        = string
-          default     = "${{ github.event.inputs.engine }}"
+          default     = "${{ steps.config.outputs.engine }}"
         }
         
         variable "engine_version" {
           description = "Database engine version"
           type        = string
-          default     = "${{ github.event.inputs.engine_version }}"
+          default     = "${{ steps.config.outputs.engine_version }}"
         }
         
         variable "instance_class" {
-          description = "DB instance class"
+          description = "RDS instance class"
           type        = string
-          default     = "${{ github.event.inputs.instance_class }}"
+          default     = "${{ steps.config.outputs.instance_class }}"
         }
         
         variable "allocated_storage" {
           description = "Allocated storage in GB"
           type        = number
-          default     = ${{ github.event.inputs.allocated_storage || 20 }}
+          default     = ${{ steps.config.outputs.allocated_storage }}
         }
         
         variable "master_username" {
           description = "Database master username"
           type        = string
-          default     = "${{ github.event.inputs.master_username }}"
+          default     = "${{ steps.config.outputs.master_username }}"
         }
         
         variable "master_password" {
@@ -355,334 +282,100 @@ jobs:
         variable "multi_az" {
           description = "Enable Multi-AZ deployment"
           type        = bool
-          default     = ${{ github.event.inputs.multi_az || 'false' }}
+          default     = ${{ steps.config.outputs.multi_az }}
         }
         
+        variable "vpc_id" {
+          description = "VPC ID"
+          type        = string
+          default     = "${{ steps.config.outputs.vpc_id || 'vpc-default' }}"
+        }
+        EOF
+            ;;
+            
+          ecs_service)
+            cat >> terraform-config/variables.tf << EOF
         # ECS specific variables
         variable "container_image" {
           description = "Container image"
           type        = string
-          default     = "${{ github.event.inputs.container_image }}"
+          default     = "${{ steps.config.outputs.container_image }}"
         }
         
         variable "container_port" {
           description = "Container port"
           type        = number
-          default     = ${{ github.event.inputs.container_port || 80 }}
+          default     = ${{ steps.config.outputs.container_port }}
         }
         
         variable "cpu" {
           description = "CPU units for ECS task"
           type        = number
-          default     = ${{ github.event.inputs.cpu || 256 }}
+          default     = ${{ steps.config.outputs.cpu }}
         }
         
         variable "memory" {
           description = "Memory for ECS task in MB"
           type        = number
-          default     = ${{ github.event.inputs.memory || 512 }}
+          default     = ${{ steps.config.outputs.memory }}
         }
         
         variable "launch_type" {
           description = "ECS launch type"
           type        = string
-          default     = "${{ github.event.inputs.launch_type }}"
+          default     = "${{ steps.config.outputs.launch_type }}"
         }
         
+        variable "vpc_id" {
+          description = "VPC ID"
+          type        = string
+          default     = "${{ steps.config.outputs.vpc_id || 'vpc-default' }}"
+        }
+        EOF
+            ;;
+            
+          alb)
+            cat >> terraform-config/variables.tf << EOF
         # ALB specific variables
         variable "internal" {
           description = "Whether the ALB should be internal"
           type        = bool
-          default     = ${{ github.event.inputs.internal || 'false' }}
+          default     = ${{ steps.config.outputs.internal }}
         }
         
+        variable "vpc_id" {
+          description = "VPC ID"
+          type        = string
+          default     = "${{ steps.config.outputs.vpc_id || 'vpc-default' }}"
+        }
+        EOF
+            ;;
+            
+          security_group)
+            cat >> terraform-config/variables.tf << EOF
         # Security Group specific variables
         variable "sg_description" {
           description = "Security group description"
           type        = string
-          default     = "${{ github.event.inputs.sg_description }}"
+          default     = "${{ steps.config.outputs.sg_description }}"
+        }
+        
+        variable "vpc_id" {
+          description = "VPC ID"
+          type        = string
+          default     = "${{ steps.config.outputs.vpc_id || 'vpc-default' }}"
         }
         
         variable "ingress_rules" {
           description = "Ingress rules for security group"
           type        = string
           default     = <<-EOT
-        ${{ github.event.inputs.ingress_rules }}
+        ${{ steps.config.outputs.ingress_rules }}
         EOT
         }
         EOF
-        
-        # Create resource-specific main.tf
-        if [[ "${{ github.event.inputs.resource_type }}" == "ec2_instance" ]]; then
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        module "ec2_instance" {
-          source = "../terraform/modules/ec2_instance"
-          
-          name                = var.name
-          environment         = var.environment
-          region              = var.region
-          instance_type       = var.instance_type
-          subnet_id           = var.subnet_id
-          security_group_ids  = var.security_group_ids
-          root_volume_size    = var.root_volume_size
-          assign_eip          = var.assign_eip
-          deployment_id       = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for EC2
-          cat > terraform-config/outputs.tf << EOF
-        output "instance_id" {
-          value = module.ec2_instance.instance_id
-          description = "The ID of the created EC2 instance"
-        }
-        
-        output "public_ip" {
-          value = module.ec2_instance.elastic_ip != null ? module.ec2_instance.elastic_ip : module.ec2_instance.instance_public_ip
-          description = "The public IP address of the instance"
-        }
-        
-        output "ssh_command" {
-          value = module.ec2_instance.ssh_command
-          description = "SSH command to connect to the instance"
-        }
-        EOF
-          
-        elif [[ "${{ github.event.inputs.resource_type }}" == "s3_bucket" ]]; then
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        module "s3_bucket" {
-          source = "../terraform/modules/s3_bucket"
-          
-          bucket_name        = var.bucket_name
-          environment        = var.environment
-          region             = var.region
-          versioning_enabled = var.versioning_enabled
-          deployment_id      = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for S3
-          cat > terraform-config/outputs.tf << EOF
-        output "bucket_id" {
-          value = module.s3_bucket.bucket_id
-          description = "The name of the bucket"
-        }
-        
-        output "bucket_arn" {
-          value = module.s3_bucket.bucket_arn
-          description = "The ARN of the bucket"
-        }
-        
-        output "bucket_domain_name" {
-          value = module.s3_bucket.bucket_domain_name
-          description = "The domain name of the bucket"
-        }
-        EOF
-        
-        elif [[ "${{ github.event.inputs.resource_type }}" == "rds_instance" ]]; then
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        module "rds_instance" {
-          source = "../terraform/modules/rds_instance"
-          
-          name              = var.name
-          environment       = var.environment
-          region            = var.region
-          vpc_id            = var.vpc_id
-          subnet_ids        = [var.subnet_id]
-          engine            = var.engine
-          engine_version    = var.engine_version
-          instance_class    = var.instance_class
-          allocated_storage = var.allocated_storage
-          master_username   = var.master_username
-          master_password   = var.master_password
-          multi_az          = var.multi_az
-          deployment_id     = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for RDS
-          cat > terraform-config/outputs.tf << EOF
-        output "db_instance_id" {
-          value = module.rds_instance.db_instance_id
-          description = "The ID of the RDS instance"
-        }
-        
-        output "db_instance_address" {
-          value = module.rds_instance.db_instance_address
-          description = "The address of the RDS instance"
-        }
-        
-        output "db_instance_endpoint" {
-          value = module.rds_instance.db_instance_endpoint
-          description = "The endpoint of the RDS instance"
-        }
-        
-        output "db_security_group_id" {
-          value = module.rds_instance.db_security_group_id
-          description = "The security group ID for the RDS instance"
-        }
-        
-        output "ssm_parameter_path" {
-          value = module.rds_instance.ssm_parameter_path
-          description = "Path to stored database credentials in SSM"
-        }
-        EOF
-        
-        elif [[ "${{ github.event.inputs.resource_type }}" == "ecs_service" ]]; then
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        module "ecs_service" {
-          source = "../terraform/modules/ecs_service"
-          
-          name            = var.name
-          environment     = var.environment
-          region          = var.region
-          vpc_id          = var.vpc_id
-          subnet_ids      = [var.subnet_id]
-          container_image = var.container_image
-          container_port  = var.container_port
-          cpu             = var.cpu
-          memory          = var.memory
-          launch_type     = var.launch_type
-          deployment_id   = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for ECS
-          cat > terraform-config/outputs.tf << EOF
-        output "cluster_id" {
-          value = module.ecs_service.cluster_id
-          description = "The ID of the ECS cluster"
-        }
-        
-        output "service_id" {
-          value = module.ecs_service.service_id
-          description = "The ID of the ECS service"
-        }
-        
-        output "task_definition_arn" {
-          value = module.ecs_service.task_definition_arn
-          description = "The ARN of the task definition"
-        }
-        
-        output "log_group_name" {
-          value = module.ecs_service.log_group_name
-          description = "The CloudWatch log group name"
-        }
-        EOF
-        
-        elif [[ "${{ github.event.inputs.resource_type }}" == "alb" ]]; then
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        module "alb" {
-          source = "../terraform/modules/alb"
-          
-          name          = var.name
-          environment   = var.environment
-          region        = var.region
-          vpc_id        = var.vpc_id
-          subnet_ids    = [var.subnet_id]
-          internal      = var.internal
-          deployment_id = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for ALB
-          cat > terraform-config/outputs.tf << EOF
-        output "alb_id" {
-          value = module.alb.alb_id
-          description = "The ID of the ALB"
-        }
-        
-        output "alb_dns_name" {
-          value = module.alb.alb_dns_name
-          description = "The DNS name of the ALB"
-        }
-        
-        output "alb_zone_id" {
-          value = module.alb.alb_zone_id
-          description = "The zone ID of the ALB"
-        }
-        
-        output "security_group_id" {
-          value = module.alb.security_group_id
-          description = "The ID of the security group attached to the ALB"
-        }
-        
-        output "target_group_arn" {
-          value = module.alb.target_group_arn
-          description = "The ARN of the default target group"
-        }
-        EOF
-        
-        elif [[ "${{ github.event.inputs.resource_type }}" == "security_group" ]]; then
-          # Parse the ingress rules from JSON
-          cat > terraform-config/main.tf << EOF
-        provider "aws" {
-          region = var.region
-        }
-        
-        locals {
-          ingress_rules = jsondecode(var.ingress_rules)
-        }
-        
-        module "security_group" {
-          source = "../terraform/modules/security_group"
-          
-          name          = var.name
-          environment   = var.environment
-          region        = var.region
-          vpc_id        = var.vpc_id
-          description   = var.sg_description
-          ingress_rules = local.ingress_rules
-          deployment_id = var.deployment_id
-        }
-        EOF
-          
-          # Create outputs.tf for Security Group
-          cat > terraform-config/outputs.tf << EOF
-        output "security_group_id" {
-          value = module.security_group.security_group_id
-          description = "The ID of the security group"
-        }
-        
-        output "security_group_arn" {
-          value = module.security_group.security_group_arn
-          description = "The ARN of the security group"
-        }
-        
-        output "security_group_name" {
-          value = module.security_group.security_group_name
-          description = "The name of the security group"
-        }
-        EOF
-        
-        else
-          echo "Unsupported resource type: ${{ github.event.inputs.resource_type }}"
-          exit 1
-        fi
-        
-        # Copy modules directory to workspace
-        mkdir -p terraform-config/modules
-        cp -r terraform/modules/* terraform-config/modules/
+            ;;
+        esac
     
     - name: Terraform Init
       working-directory: terraform-config
