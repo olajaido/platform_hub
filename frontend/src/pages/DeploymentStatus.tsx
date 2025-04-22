@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import apiClient from '../api';
-import { useParams } from 'react-router-dom';
+import React from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { 
   Container, 
   Paper, 
@@ -13,17 +12,24 @@ import {
   CardContent,
   List,
   ListItem,
-  ListItemText
+  ListItemText,
+  Button,
+  Alert,
+  IconButton,
+  Stepper,
+  Step,
+  StepLabel
 } from '@mui/material';
-import { GridItem } from './../components/common/GridItem';
-import Grid from '@mui/material/Grid';
+import { Grid } from '../components/common/GridWrapper';
+import { GridItem } from '../components/common/GridItem';
 import { 
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   Pending as PendingIcon,
-  AccessTime as AccessTimeIcon
+  AccessTime as AccessTimeIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
-import { useQuery } from 'react-query';
+import { useDeploymentStatus } from '../hooks/useDeploymentStatus';
 
 // Custom log display component
 const LogConsole = ({ logs = [] }: { logs?: string[] }) => {
@@ -86,14 +92,12 @@ const StatusChip = ({ status }: { status: string }) => {
   );
 };
 
-// Terraform outputs display component
-const OutputsDisplay = ({ outputs }: { outputs: Record<string, any> | null }) => {
+// Component to display Terraform outputs
+const OutputsDisplay = ({ outputs }: { outputs: Record<string, any> }) => {
   if (!outputs || Object.keys(outputs).length === 0) {
-    return (
-      <Typography variant="body2">No outputs available yet.</Typography>
-    );
+    return <Typography>No outputs available</Typography>;
   }
-
+  
   return (
     <Card variant="outlined">
       <CardContent>
@@ -101,8 +105,9 @@ const OutputsDisplay = ({ outputs }: { outputs: Record<string, any> | null }) =>
           {Object.entries(outputs).map(([key, value]) => (
             <ListItem key={key}>
               <ListItemText 
-                primary={<Typography variant="subtitle2">{key}</Typography>}
-                secondary={<Typography variant="body2">{typeof value === 'object' ? JSON.stringify(value) : value}</Typography>}
+                primary={key} 
+                secondary={String(value)}
+                primaryTypographyProps={{ fontWeight: 'bold' }}
               />
             </ListItem>
           ))}
@@ -114,76 +119,26 @@ const OutputsDisplay = ({ outputs }: { outputs: Record<string, any> | null }) =>
 
 // Main component
 const DeploymentStatus = () => {
-  const { deploymentId } = useParams();
-  const [logs, setLogs] = useState<string[]>([]);
+  const { deploymentId } = useParams<{deploymentId: string}>();
+  const navigate = useNavigate();
   
-  // Fetch deployment status with enhanced polling
-  const { data: deploymentData, isLoading: statusLoading, error: statusError, refetch } = useQuery<any, Error>(
-    ['deployment', deploymentId],
-    async () => {
-      const response = await apiClient.get(`/api/deployments/${deploymentId}/status`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      return response.data;
-    },
-    { 
-      refetchInterval: (data) => {
-        // Stop polling if deployment is completed or failed
-        if (data?.status === 'completed' || data?.status === 'failed') {
-          return false;
-        }
-        return 5000; // Poll every 5 seconds for in-progress deployments
-      } 
-    }
-  );
+  // Use our custom hook with WebSocket support
+  const { status, logs, refetch } = useDeploymentStatus({
+    deploymentId: deploymentId || '',
+    wsEnabled: true,
+    pollingEnabled: true
+  });
   
-  // Fetch deployment logs
-  const { data: logsData, isLoading: logsLoading, error: logsError } = useQuery(
-    ['logs', deploymentId],
-    async () => {
-      const response = await apiClient.get(`/api/deployments/${deploymentId}/logs`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
-      return response.data;
-    },
-    { refetchInterval: 3000 }
-  );
+  const isLoading = status?.isLoading || !status;
+  const error = status?.error;
   
-  useEffect(() => {
-    if (logsData && logsData.logs) {
-      setLogs(logsData.logs);
-    }
-
-    // Set up automatic refresh for in-progress deployments
-    const intervalId = setInterval(() => {
-      if (deploymentData?.status === 'pending' || deploymentData?.status === 'in_progress') {
-        refetch();
-      }
-    }, 5000);
-
-    let timeoutId: NodeJS.Timeout | undefined;
-    if (deploymentData?.status === 'pending') {
-      const createdTime = new Date(deploymentData.created_at).getTime();
-      const currentTime = new Date().getTime();
-      
-      // If deployment has been pending for more than 5 minutes, consider it failed
-      const fiveMinutesInMs = 5 * 60 * 1000;
-      if (currentTime - createdTime > fiveMinutesInMs) {
-        timeoutId = setTimeout(() => {
-          setLogs(prevLogs => [...prevLogs, "⚠️ WARNING: Deployment has been pending for over 5 minutes. It may have failed or stalled. Check GitHub Actions for details."]);
-        }, 10000);
-      }
-    }
-    
-    // Update the return to clear both timers
-    return () => {
-      clearInterval(intervalId);
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, [logsData, deploymentData, refetch]);
-    
-  const isLoading = statusLoading || logsLoading;
-  const error = statusError || logsError;
+  const handleRefresh = () => {
+    refetch();
+  };
+  
+  const handleBackToDashboard = () => {
+    navigate('/dashboard');
+  };
   
   if (error) {
     return (
@@ -193,8 +148,16 @@ const DeploymentStatus = () => {
             Error loading deployment details
           </Typography>
           <Typography variant="body1">
-            {(error as any).response?.data?.detail || (error as Error).message}
+            {error.message}
           </Typography>
+          <Button 
+            variant="contained" 
+            color="primary"
+            sx={{ mt: 2 }}
+            onClick={handleBackToDashboard}
+          >
+            Back to Dashboard
+          </Button>
         </Paper>
       </Container>
     );
@@ -208,16 +171,26 @@ const DeploymentStatus = () => {
             Deployment Status
           </Typography>
           
-          {isLoading ? (
-            <CircularProgress size={24} />
-          ) : (
-            deploymentData && <StatusChip status={deploymentData.status} />
-          )}
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            {isLoading ? (
+              <CircularProgress size={24} sx={{ mr: 1 }} />
+            ) : (
+              status && <StatusChip status={status.status} />
+            )}
+            
+            <IconButton 
+              onClick={handleRefresh} 
+              sx={{ ml: 1 }}
+              aria-label="Refresh"
+            >
+              <RefreshIcon />
+            </IconButton>
+          </Box>
         </Box>
         
         <Divider sx={{ mb: 3 }} />
         
-        {isLoading ? (
+        {isLoading && !status ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
             <CircularProgress />
           </Box>
@@ -229,41 +202,96 @@ const DeploymentStatus = () => {
                 <Typography variant="body1">{deploymentId}</Typography>
               </GridItem>
               
-              {deploymentData && deploymentData.resource_type && (
+              {status && status.resource_type && (
                 <GridItem xs={12} md={6}>
                   <Typography variant="subtitle1">Resource Type:</Typography>
                   <Typography variant="body1" sx={{ textTransform: 'capitalize' }}>
-                    {deploymentData.resource_type}
+                    {status.resource_type}
                   </Typography>
                 </GridItem>
               )}
               
-              {deploymentData && deploymentData.created_at && (
+              {status && status.name && (
+                <GridItem xs={12} md={6}>
+                  <Typography variant="subtitle1">Name:</Typography>
+                  <Typography variant="body1">
+                    {status.name}
+                  </Typography>
+                </GridItem>
+              )}
+              
+              {status && status.environment && (
+                <GridItem xs={12} md={6}>
+                  <Typography variant="subtitle1">Environment:</Typography>
+                  <Typography variant="body1" sx={{ textTransform: 'capitalize' }}>
+                    {status.environment}
+                  </Typography>
+                </GridItem>
+              )}
+              
+              {status && status.region && (
+                <GridItem xs={12} md={6}>
+                  <Typography variant="subtitle1">Region:</Typography>
+                  <Typography variant="body1">
+                    {status.region}
+                  </Typography>
+                </GridItem>
+              )}
+              
+              {status && status.created_at && (
                 <GridItem xs={12} md={6}>
                   <Typography variant="subtitle1">Created:</Typography>
                   <Typography variant="body1">
-                    {new Date(deploymentData.created_at).toLocaleString()}
+                    {new Date(status.created_at).toLocaleString()}
                   </Typography>
                 </GridItem>
               )}
               
-              {deploymentData && deploymentData.completed_at && (
+              {status && status.completed_at && (
                 <GridItem xs={12} md={6}>
                   <Typography variant="subtitle1">Completed:</Typography>
                   <Typography variant="body1">
-                    {new Date(deploymentData.completed_at).toLocaleString()}
+                    {new Date(status.completed_at).toLocaleString()}
                   </Typography>
+                </GridItem>
+              )}
+              
+              {status && status.error_message && (
+                <GridItem xs={12}>
+                  <Alert severity="error" sx={{ mt: 2 }}>
+                    {status.error_message}
+                  </Alert>
                 </GridItem>
               )}
             </Grid>
             
+            {/* Deployment Progress Stepper */}
+            {status && (
+              <Box sx={{ mb: 4 }}>
+                <Typography variant="h6" gutterBottom>
+                  Deployment Progress
+                </Typography>
+                <Stepper activeStep={getStepNumber(status.status)} sx={{ my: 3 }}>
+                  <Step completed={status.status !== 'pending'}>
+                    <StepLabel>Initiated</StepLabel>
+                  </Step>
+                  <Step completed={status.status === 'in_progress' || status.status === 'completed'}>
+                    <StepLabel>In Progress</StepLabel>
+                  </Step>
+                  <Step completed={status.status === 'completed'}>
+                    <StepLabel>Completed</StepLabel>
+                  </Step>
+                </Stepper>
+              </Box>
+            )}
+            
             {/* Terraform Outputs */}
-            {deploymentData && deploymentData.outputs && Object.keys(deploymentData.outputs).length > 0 && (
+            {status && status.outputs && Object.keys(status.outputs).length > 0 && (
               <Box sx={{ mb: 4 }}>
                 <Typography variant="h6" gutterBottom>
                   Deployment Outputs
                 </Typography>
-                <OutputsDisplay outputs={deploymentData.outputs} />
+                <OutputsDisplay outputs={status.outputs} />
               </Box>
             )}
             
@@ -272,11 +300,36 @@ const DeploymentStatus = () => {
             </Typography>
             
             <LogConsole logs={logs} />
+            
+            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+              <Button 
+                variant="outlined" 
+                onClick={handleBackToDashboard}
+              >
+                Back to Dashboard
+              </Button>
+            </Box>
           </>
         )}
       </Paper>
     </Container>
   );
+};
+
+// Helper function to determine step number
+const getStepNumber = (status: string): number => {
+  switch (status) {
+    case 'pending':
+      return 0;
+    case 'in_progress':
+      return 1;
+    case 'completed':
+      return 2;
+    case 'failed':
+      return 1; // Failed stays at the "In Progress" step
+    default:
+      return 0;
+  }
 };
 
 export default DeploymentStatus;

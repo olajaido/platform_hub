@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Typography, Paper, Button, Box, Chip, ButtonGroup, Alert, IconButton } from '@mui/material';
 import { Link } from 'react-router-dom';
-import Grid from '@mui/material/Grid';
+import { Grid } from '../components/common/GridWrapper';
 import { GridItem } from '../components/common/GridItem';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
 import apiClient from '../api';

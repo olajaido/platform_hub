@@ -1,9 +1,7 @@
 // src/components/common/GridItem.tsx
 import React from 'react';
-import { Grid } from '@mui/material';
-import apiClient from '../../api';
+import { Grid } from './GridWrapper';
 
-// This tells TypeScript to trust us and ignore type checking for this component
 interface GridItemProps {
   children: React.ReactNode;
   xs?: number | boolean;
@@ -11,28 +9,19 @@ interface GridItemProps {
   md?: number | boolean;
   lg?: number | boolean;
   xl?: number | boolean;
-  [key: string]: any; // Allow any other props
+  [key: string]: any;
 }
 
-export const GridItem: React.FC<GridItemProps> = ({
-  children,
-  xs,
-  sm,
-  md,
-  lg,
-  xl,
-  ...rest
-}) => {
-  // Type assertion to bypass TypeScript's checks
-  const gridProps = {
-    item: true,
-    xs,
-    sm,
-    md,
-    lg,
-    xl,
-    ...rest
-  } as any;
+/**
+ * GridItem is a wrapped Grid component that provides consistent spacing
+ * and styling for form elements and content sections.
+ */
+export const GridItem: React.FC<GridItemProps> = (props) => {
+  const { children, ...rest } = props;
   
-  return <Grid {...gridProps}>{children}</Grid>;
+  return (
+    <Grid item={true} {...rest}>
+      {children}
+    </Grid>
+  );
 };

@@ -11,6 +11,10 @@ on:
         options:
           - ec2_instance
           - s3_bucket
+          - rds_instance
+          - ecs_service
+          - alb
+          - security_group
       
       name:
         description: 'Resource name'
@@ -59,9 +63,15 @@ on:
           - 'true'
           - 'false'
       
-      # Existing VPC inputs for EC2
+      # VPC related inputs
+      vpc_id:
+        description: 'VPC ID for the resource'
+        required: false
+        default: 'vpc-01234567890abcdef'
+        type: string
+        
       subnet_id:
-        description: 'Subnet for EC2 instance'
+        description: 'Subnet for EC2 or primary subnet for other resources'
         required: false
         default: 'subnet-07759e500cfdfb6b2'
         type: choice
@@ -84,6 +94,108 @@ on:
         options:
           - 'true'
           - 'false'
+      
+      # RDS specific inputs
+      engine:
+        description: 'Database engine (for RDS only)'
+        required: false
+        default: 'mysql'
+        type: choice
+        options:
+          - 'mysql'
+          - 'postgres'
+          - 'aurora-mysql'
+          - 'aurora-postgresql'
+      
+      engine_version:
+        description: 'Database engine version (for RDS only)'
+        required: false
+        default: '8.0'
+        type: string
+      
+      instance_class:
+        description: 'RDS instance class (for RDS only)'
+        required: false
+        default: 'db.t3.micro'
+        type: string
+      
+      allocated_storage:
+        description: 'Database storage size in GB (for RDS only)'
+        required: false
+        default: '20'
+        type: string
+      
+      master_username:
+        description: 'Database master username (for RDS only)'
+        required: false
+        default: 'admin'
+        type: string
+        
+      multi_az:
+        description: 'Enable Multi-AZ deployment for RDS'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      
+      # ECS specific inputs
+      container_image:
+        description: 'Container image (for ECS only, e.g. nginx:latest)'
+        required: false
+        default: 'nginx:latest'
+        type: string
+      
+      container_port:
+        description: 'Container port (for ECS only)'
+        required: false
+        default: '80'
+        type: string
+      
+      cpu:
+        description: 'CPU units for ECS task (256=0.25vCPU)'
+        required: false
+        default: '256'
+        type: string
+      
+      memory:
+        description: 'Memory for ECS task in MB'
+        required: false
+        default: '512'
+        type: string
+      
+      launch_type:
+        description: 'ECS launch type'
+        required: false
+        default: 'FARGATE'
+        type: choice
+        options:
+          - 'FARGATE'
+          - 'EC2'
+      
+      # ALB specific inputs
+      internal:
+        description: 'Whether the ALB should be internal'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      
+      # Security Group specific inputs
+      sg_description:
+        description: 'Security group description'
+        required: false
+        default: 'Managed by Terraform'
+        type: string
+      
+      ingress_rules:
+        description: 'Ingress rules in JSON format (for Security Group only)'
+        required: false
+        default: '[{"from_port":80,"to_port":80,"protocol":"tcp","cidr_blocks":["0.0.0.0/0"],"description":"HTTP"}]'
+        type: string
 
 env:
     APP_WEBHOOK_URL: https://platform-hub.onrender.com/api/webhook/deployment
@@ -151,17 +263,24 @@ jobs:
           default     = "${{ github.event.inputs.name }}"
         }
         
+        # Networking variables
+        variable "vpc_id" {
+          description = "VPC ID for the resource"
+          type        = string
+          default     = "${{ github.event.inputs.vpc_id }}"
+        }
+        
+        variable "subnet_id" {
+          description = "Primary subnet ID"
+          type        = string
+          default     = "${{ github.event.inputs.subnet_id }}"
+        }
+        
         # EC2 specific variables
         variable "instance_type" {
           description = "EC2 instance type"
           type        = string
           default     = "${{ github.event.inputs.instance_type }}"
-        }
-        
-        variable "subnet_id" {
-          description = "Subnet ID for the EC2 instance"
-          type        = string
-          default     = "${{ github.event.inputs.subnet_id }}"
         }
         
         variable "root_volume_size" {
@@ -193,6 +312,103 @@ jobs:
           description = "Whether to enable bucket versioning"
           type        = bool
           default     = ${{ github.event.inputs.versioning_enabled || 'false' }}
+        }
+        
+        # RDS specific variables
+        variable "engine" {
+          description = "Database engine"
+          type        = string
+          default     = "${{ github.event.inputs.engine }}"
+        }
+        
+        variable "engine_version" {
+          description = "Database engine version"
+          type        = string
+          default     = "${{ github.event.inputs.engine_version }}"
+        }
+        
+        variable "instance_class" {
+          description = "DB instance class"
+          type        = string
+          default     = "${{ github.event.inputs.instance_class }}"
+        }
+        
+        variable "allocated_storage" {
+          description = "Allocated storage in GB"
+          type        = number
+          default     = ${{ github.event.inputs.allocated_storage || 20 }}
+        }
+        
+        variable "master_username" {
+          description = "Database master username"
+          type        = string
+          default     = "${{ github.event.inputs.master_username }}"
+        }
+        
+        variable "master_password" {
+          description = "Database master password"
+          type        = string
+          default     = ""
+          sensitive   = true
+        }
+        
+        variable "multi_az" {
+          description = "Enable Multi-AZ deployment"
+          type        = bool
+          default     = ${{ github.event.inputs.multi_az || 'false' }}
+        }
+        
+        # ECS specific variables
+        variable "container_image" {
+          description = "Container image"
+          type        = string
+          default     = "${{ github.event.inputs.container_image }}"
+        }
+        
+        variable "container_port" {
+          description = "Container port"
+          type        = number
+          default     = ${{ github.event.inputs.container_port || 80 }}
+        }
+        
+        variable "cpu" {
+          description = "CPU units for ECS task"
+          type        = number
+          default     = ${{ github.event.inputs.cpu || 256 }}
+        }
+        
+        variable "memory" {
+          description = "Memory for ECS task in MB"
+          type        = number
+          default     = ${{ github.event.inputs.memory || 512 }}
+        }
+        
+        variable "launch_type" {
+          description = "ECS launch type"
+          type        = string
+          default     = "${{ github.event.inputs.launch_type }}"
+        }
+        
+        # ALB specific variables
+        variable "internal" {
+          description = "Whether the ALB should be internal"
+          type        = bool
+          default     = ${{ github.event.inputs.internal || 'false' }}
+        }
+        
+        # Security Group specific variables
+        variable "sg_description" {
+          description = "Security group description"
+          type        = string
+          default     = "${{ github.event.inputs.sg_description }}"
+        }
+        
+        variable "ingress_rules" {
+          description = "Ingress rules for security group"
+          type        = string
+          default     = <<-EOT
+        ${{ github.event.inputs.ingress_rules }}
+        EOT
         }
         EOF
         
@@ -271,6 +487,194 @@ jobs:
         }
         EOF
         
+        elif [[ "${{ github.event.inputs.resource_type }}" == "rds_instance" ]]; then
+          cat > terraform-config/main.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
+        module "rds_instance" {
+          source = "../terraform/modules/rds_instance"
+          
+          name              = var.name
+          environment       = var.environment
+          region            = var.region
+          vpc_id            = var.vpc_id
+          subnet_ids        = [var.subnet_id]
+          engine            = var.engine
+          engine_version    = var.engine_version
+          instance_class    = var.instance_class
+          allocated_storage = var.allocated_storage
+          master_username   = var.master_username
+          master_password   = var.master_password
+          multi_az          = var.multi_az
+          deployment_id     = var.deployment_id
+        }
+        EOF
+          
+          # Create outputs.tf for RDS
+          cat > terraform-config/outputs.tf << EOF
+        output "db_instance_id" {
+          value = module.rds_instance.db_instance_id
+          description = "The ID of the RDS instance"
+        }
+        
+        output "db_instance_address" {
+          value = module.rds_instance.db_instance_address
+          description = "The address of the RDS instance"
+        }
+        
+        output "db_instance_endpoint" {
+          value = module.rds_instance.db_instance_endpoint
+          description = "The endpoint of the RDS instance"
+        }
+        
+        output "db_security_group_id" {
+          value = module.rds_instance.db_security_group_id
+          description = "The security group ID for the RDS instance"
+        }
+        
+        output "ssm_parameter_path" {
+          value = module.rds_instance.ssm_parameter_path
+          description = "Path to stored database credentials in SSM"
+        }
+        EOF
+        
+        elif [[ "${{ github.event.inputs.resource_type }}" == "ecs_service" ]]; then
+          cat > terraform-config/main.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
+        module "ecs_service" {
+          source = "../terraform/modules/ecs_service"
+          
+          name            = var.name
+          environment     = var.environment
+          region          = var.region
+          vpc_id          = var.vpc_id
+          subnet_ids      = [var.subnet_id]
+          container_image = var.container_image
+          container_port  = var.container_port
+          cpu             = var.cpu
+          memory          = var.memory
+          launch_type     = var.launch_type
+          deployment_id   = var.deployment_id
+        }
+        EOF
+          
+          # Create outputs.tf for ECS
+          cat > terraform-config/outputs.tf << EOF
+        output "cluster_id" {
+          value = module.ecs_service.cluster_id
+          description = "The ID of the ECS cluster"
+        }
+        
+        output "service_id" {
+          value = module.ecs_service.service_id
+          description = "The ID of the ECS service"
+        }
+        
+        output "task_definition_arn" {
+          value = module.ecs_service.task_definition_arn
+          description = "The ARN of the task definition"
+        }
+        
+        output "log_group_name" {
+          value = module.ecs_service.log_group_name
+          description = "The CloudWatch log group name"
+        }
+        EOF
+        
+        elif [[ "${{ github.event.inputs.resource_type }}" == "alb" ]]; then
+          cat > terraform-config/main.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
+        module "alb" {
+          source = "../terraform/modules/alb"
+          
+          name          = var.name
+          environment   = var.environment
+          region        = var.region
+          vpc_id        = var.vpc_id
+          subnet_ids    = [var.subnet_id]
+          internal      = var.internal
+          deployment_id = var.deployment_id
+        }
+        EOF
+          
+          # Create outputs.tf for ALB
+          cat > terraform-config/outputs.tf << EOF
+        output "alb_id" {
+          value = module.alb.alb_id
+          description = "The ID of the ALB"
+        }
+        
+        output "alb_dns_name" {
+          value = module.alb.alb_dns_name
+          description = "The DNS name of the ALB"
+        }
+        
+        output "alb_zone_id" {
+          value = module.alb.alb_zone_id
+          description = "The zone ID of the ALB"
+        }
+        
+        output "security_group_id" {
+          value = module.alb.security_group_id
+          description = "The ID of the security group attached to the ALB"
+        }
+        
+        output "target_group_arn" {
+          value = module.alb.target_group_arn
+          description = "The ARN of the default target group"
+        }
+        EOF
+        
+        elif [[ "${{ github.event.inputs.resource_type }}" == "security_group" ]]; then
+          # Parse the ingress rules from JSON
+          cat > terraform-config/main.tf << EOF
+        provider "aws" {
+          region = var.region
+        }
+        
+        locals {
+          ingress_rules = jsondecode(var.ingress_rules)
+        }
+        
+        module "security_group" {
+          source = "../terraform/modules/security_group"
+          
+          name          = var.name
+          environment   = var.environment
+          region        = var.region
+          vpc_id        = var.vpc_id
+          description   = var.sg_description
+          ingress_rules = local.ingress_rules
+          deployment_id = var.deployment_id
+        }
+        EOF
+          
+          # Create outputs.tf for Security Group
+          cat > terraform-config/outputs.tf << EOF
+        output "security_group_id" {
+          value = module.security_group.security_group_id
+          description = "The ID of the security group"
+        }
+        
+        output "security_group_arn" {
+          value = module.security_group.security_group_arn
+          description = "The ARN of the security group"
+        }
+        
+        output "security_group_name" {
+          value = module.security_group.security_group_name
+          description = "The name of the security group"
+        }
+        EOF
+        
         else
           echo "Unsupported resource type: ${{ github.event.inputs.resource_type }}"
           exit 1
@@ -302,6 +706,22 @@ jobs:
     - name: Post Success Results to Application
       if: success() && env.APP_WEBHOOK_URL != ''
       run: |
+          # Generate detailed logs
+          LOGS_JSON=$(cat <<-EOF
+          [
+            "Starting Terraform deployment for ${{ github.event.inputs.resource_type }}",
+            "Name: ${{ github.event.inputs.name }}",
+            "Environment: ${{ github.event.inputs.environment }}",
+            "Region: ${{ github.event.inputs.region }}",
+            "Terraform initialization completed successfully",
+            "Terraform plan completed successfully",
+            "Terraform apply completed successfully",
+            "Resource created successfully"
+          ]
+          EOF
+          )
+          
+          # Send webhook with detailed information
           curl -X POST -H "Content-Type: application/json" -d '{
             "secret": "${{ secrets.WEBHOOK_SECRET }}",
             "deployment_id": "${{ steps.deployment_id.outputs.id }}",
@@ -312,12 +732,36 @@ jobs:
             "region": "${{ github.event.inputs.region }}",
             "outputs": ${{ steps.terraform_output.outputs.outputs }},
             "requested_by": "${{ github.actor }}",
-            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+            "logs": '"$LOGS_JSON"'
           }' ${{ env.APP_WEBHOOK_URL }}
       
     - name: Post Failure Results to Application
       if: failure() && env.APP_WEBHOOK_URL != ''
       run: |
+          # Determine which step failed
+          FAILED_STEP="Unknown"
+          ERROR_MESSAGE="Deployment failed in GitHub Actions workflow"
+          
+          if [ -f "terraform-config/terraform.log" ]; then
+            ERROR_MESSAGE=$(tail -n 20 terraform-config/terraform.log)
+          elif [ -f "terraform-config/error.log" ]; then
+            ERROR_MESSAGE=$(cat terraform-config/error.log)
+          fi
+          
+          # Generate detailed error logs
+          LOGS_JSON=$(cat <<-EOF
+          [
+            "Deployment of ${{ github.event.inputs.resource_type }} failed",
+            "Name: ${{ github.event.inputs.name }}",
+            "Environment: ${{ github.event.inputs.environment }}",
+            "Region: ${{ github.event.inputs.region }}",
+            "Error details: ${ERROR_MESSAGE}"
+          ]
+          EOF
+          )
+          
+          # Send webhook with detailed error information
           curl -X POST -H "Content-Type: application/json" -d '{
             "secret": "${{ secrets.WEBHOOK_SECRET }}",
             "deployment_id": "${{ steps.deployment_id.outputs.id }}",
@@ -327,7 +771,8 @@ jobs:
             "environment": "${{ github.event.inputs.environment }}",
             "region": "${{ github.event.inputs.region }}",
             "outputs": {},
-            "error_message": "Deployment failed in GitHub Actions workflow",
+            "error_message": "'"$ERROR_MESSAGE"'",
             "requested_by": "${{ github.actor }}",
-            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+            "completed_at": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+            "logs": '"$LOGS_JSON"'
           }' ${{ env.APP_WEBHOOK_URL }}

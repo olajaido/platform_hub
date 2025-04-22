@@ -1,11 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Form
+from fastapi import FastAPI, Depends, HTTPException, status, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 import uvicorn
 import os
-from typing import List, Optional
-from datetime import timedelta
+import asyncio
+from typing import List, Optional, Dict, Any
+from datetime import timedelta, datetime
 
 # Import modules - fixed imports
 from src.auth import verify_token, get_current_user, create_access_token, authenticate_user, User, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -40,6 +41,7 @@ class ResourceRequest(BaseModel):
     size: str
     region: str
     parameters: dict
+    
 class DeploymentRequest(BaseModel):
     resource_type: str
     name: str
@@ -120,19 +122,73 @@ async def get_deployment_status(
     deployment_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    # Get actual deployment status from Supabase
+    """Get detailed status of a specific deployment"""
     from src.supabase import get_deployment
     
     deployment = get_deployment(deployment_id)
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
-        
+    
+    # Return comprehensive deployment information
     return {
         "deployment_id": deployment["id"],
-        "status": deployment["status"],
-        "created_at": deployment["created_at"],
-        "completed_at": deployment.get("completed_at")
+        "resource_type": deployment.get("resource_type", ""),
+        "name": deployment.get("name", ""),
+        "environment": deployment.get("environment", ""),
+        "region": deployment.get("region", ""),
+        "status": deployment.get("status", ""),
+        "outputs": deployment.get("outputs", {}),
+        "parameters": deployment.get("parameters", {}),
+        "created_at": deployment.get("created_at", ""),
+        "completed_at": deployment.get("completed_at", ""),
+        "error_message": deployment.get("error_message", "")
     }
+
+@app.get("/api/deployments/{deployment_id}/logs")
+async def get_deployment_logs(
+    deployment_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get logs for a specific deployment"""
+    from src.supabase import get_deployment
+    
+    deployment = get_deployment(deployment_id)
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    
+    # Initialize with standard log entries based on status
+    logs = []
+    
+    # Add initialization log
+    if deployment.get("created_at"):
+        logs.append(f"[{deployment.get('created_at')}] Deployment initiated for {deployment.get('resource_type')} '{deployment.get('name')}'")
+    
+    # Add status-based logs
+    status = deployment.get("status", "")
+    if status == "pending":
+        logs.append(f"Deployment is waiting to be processed by GitHub Actions")
+    elif status == "in_progress":
+        logs.append(f"Deployment is currently being processed")
+    elif status == "completed":
+        completed_at = deployment.get("completed_at", "")
+        logs.append(f"[{completed_at}] Deployment completed successfully")
+        
+        # Add outputs as logs
+        outputs = deployment.get("outputs", {})
+        if outputs:
+            logs.append("Deployment outputs:")
+            for key, value in outputs.items():
+                logs.append(f"  {key}: {value}")
+    elif status == "failed":
+        error_msg = deployment.get("error_message", "Unknown error")
+        logs.append(f"Deployment failed: {error_msg}")
+    
+    # Get additional logs if stored
+    stored_logs = deployment.get("logs", [])
+    if stored_logs:
+        logs.extend(stored_logs)
+    
+    return {"logs": logs}
 
 @app.post("/api/deployments/create", response_model=DeploymentResponse)
 async def create_deployment(
@@ -172,37 +228,161 @@ async def create_deployment(
 @app.post("/api/webhook/deployment")
 async def deployment_webhook(data: dict):
     """Receive deployment updates from GitHub Actions"""
-    # Verify a shared secret
-    webhook_secret = os.getenv("WEBHOOK_SECRET")
-    if data.get("secret") != webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    try:
+        # Verify webhook secret
+        webhook_secret = os.getenv("WEBHOOK_SECRET")
+        if not webhook_secret or data.get("secret") != webhook_secret:
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+            
+        deployment_id = data.get("deployment_id")
+        if not deployment_id:
+            raise HTTPException(status_code=400, detail="Missing deployment_id")
+            
+        from src.supabase import update_deployment, save_deployment, get_deployment
         
-    deployment_id = data.get("deployment_id")
-    from src.supabase import update_deployment, save_deployment, get_deployment
+        # Enhanced error handling for required fields
+        for field in ["resource_type", "name", "environment", "region", "status"]:
+            if field not in data:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        
+        update_data = {
+            "resource_type": data.get("resource_type"),
+            "name": data.get("name"),
+            "environment": data.get("environment"),
+            "region": data.get("region"),
+            "status": data.get("status"),
+            "outputs": data.get("outputs", {}),
+            "completed_at": data.get("completed_at"),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        
+        # Add error message if present
+        if "error_message" in data:
+            update_data["error_message"] = data.get("error_message")
+            
+        # Process additional logs if present
+        if "logs" in data and isinstance(data["logs"], list):
+            update_data["logs"] = data.get("logs")
+        
+        # Check if the deployment exists
+        existing_deployment = get_deployment(deployment_id)
+        
+        if not existing_deployment:
+            # Create new deployment record
+            update_data["id"] = deployment_id
+            update_data["created_at"] = data.get("created_at") or datetime.utcnow().isoformat()
+            save_deployment(update_data)
+        else:
+            # Update existing deployment
+            update_deployment(deployment_id, update_data)
+        
+        # Trigger websocket notifications (will be implemented later)
+        
+        return {"status": "ok", "message": "Webhook processed successfully"}
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Log error and return 500
+        print(f"Error processing webhook: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing webhook: {str(e)}"
+        )
+
+# WebSocket connection for real-time deployment updates
+@app.websocket("/ws/deployments/{deployment_id}")
+async def websocket_deployment(websocket: WebSocket, deployment_id: str):
+    await websocket.accept()
     
-    update_data = {
-        "resource_type": data.get("resource_type"),
-        "name": data.get("name"),
-        "environment": data.get("environment"),
-        "region": data.get("region"),
-        "status": data.get("status"),
-        "outputs": data.get("outputs", {}),
-        "completed_at": data.get("completed_at")
-    }
-    
-    # Check if the deployment exists
-    existing_deployment = get_deployment(deployment_id)
-    
-    if not existing_deployment:
-        # Create new deployment record
-        update_data["id"] = deployment_id
-        update_data["created_at"] = data.get("created_at")
-        save_deployment(update_data)
-    else:
-        # Update existing deployment
-        update_deployment(deployment_id, update_data)
-    
-    return {"status": "ok"}
+    try:
+        # Send initial deployment status
+        from src.supabase import get_deployment
+        deployment = get_deployment(deployment_id)
+        
+        if not deployment:
+            await websocket.send_json({"error": "Deployment not found"})
+            await websocket.close()
+            return
+            
+        await websocket.send_json({
+            "type": "status_update",
+            "data": {
+                "deployment_id": deployment.get("id"),
+                "status": deployment.get("status"),
+                "outputs": deployment.get("outputs", {})
+            }
+        })
+        
+        # Keep connection open and periodically check for updates
+        while True:
+            # Re-fetch deployment every 3 seconds
+            await asyncio.sleep(3)
+            current_deployment = get_deployment(deployment_id)
+            
+            if not current_deployment:
+                await websocket.send_json({"error": "Deployment no longer exists"})
+                break
+                
+            # Send update only if status changed
+            if current_deployment.get("status") != deployment.get("status"):
+                await websocket.send_json({
+                    "type": "status_update",
+                    "data": {
+                        "deployment_id": current_deployment.get("id"),
+                        "status": current_deployment.get("status"),
+                        "outputs": current_deployment.get("outputs", {})
+                    }
+                })
+                
+                # If deployment completed or failed, send final message and close
+                if current_deployment.get("status") in ["completed", "failed"]:
+                    await websocket.send_json({
+                        "type": "deployment_finished",
+                        "data": {
+                            "status": current_deployment.get("status"),
+                            "completed_at": current_deployment.get("completed_at")
+                        }
+                    })
+                    break
+                    
+            deployment = current_deployment
+            
+    except WebSocketDisconnect:
+        # Client disconnected
+        pass
+    except Exception as e:
+        # Try to send error message before closing
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
+    finally:
+        # Ensure connection is closed
+        try:
+            await websocket.close()
+        except:
+            pass
+
+# Background task to check for stalled deployments
+async def check_stalled_deployments():
+    while True:
+        try:
+            from src.supabase import update_stalled_deployments
+            
+            # Check every minute
+            await asyncio.sleep(60)
+            result = update_stalled_deployments()
+            if result and len(result) > 0:
+                print(f"Updated {len(result)} stalled deployments")
+        except Exception as e:
+            print(f"Error checking stalled deployments: {str(e)}")
+
+# Startup event to initialize background tasks
+@app.on_event("startup")
+async def startup_event():
+    # Start background task for checking stalled deployments
+    asyncio.create_task(check_stalled_deployments())
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
